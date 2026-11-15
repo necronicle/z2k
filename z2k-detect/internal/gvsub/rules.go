@@ -81,16 +81,22 @@ var legacyHooks = [...]struct{ table, parent, chain string }{
 	{"nat", "PREROUTING", "Z2K_GVSUB"}, {"mangle", "PREROUTING", "Z2K_GVSUB"}, {"filter", "FORWARD", "Z2K_GVSUB_Q"},
 }
 
+var dnsChains = [...]string{"OUTPUT", "FORWARD"}
+
 func (r IPTables) Ensure() (bool, error) {
 	recreated := false
 	var firstErr error
 	for _, bin := range r.bins() {
-		for _, kind := range []string{"video", "cache", "gvt1"} {
-			check := append([]string{"-w", "-t", "mangle", "-C", "OUTPUT"}, r.dnsRule(kind)...)
-			if r.run(bin, check...) != nil {
-				ins := append([]string{"-w", "-t", "mangle", "-I", "OUTPUT", "1"}, r.dnsRule(kind)...)
-				if err := r.run(bin, ins...); err != nil && firstErr == nil {
-					firstErr = err
+		for _, chain := range dnsChains {
+			for _, kind := range []string{"video", "cache", "gvt1"} {
+				check := append([]string{"-w", "-t", "mangle", "-C", chain}, r.dnsRule(kind)...)
+				if r.run(bin, check...) != nil {
+					ins := append([]string{"-w", "-t", "mangle", "-I", chain, "1"}, r.dnsRule(kind)...)
+					if err := r.run(bin, ins...); err != nil && firstErr == nil {
+						firstErr = err
+					} else if err == nil {
+						recreated = true
+					}
 				}
 			}
 		}
@@ -98,20 +104,22 @@ func (r IPTables) Ensure() (bool, error) {
 	return recreated, firstErr
 }
 
-// Teardown — каркас целиком: очередь DNS, крючки и цепочки.
+// Teardown — каркас целиком: очередь DNS в OUTPUT и FORWARD, старые крючки и цепочки.
 func (r IPTables) Teardown() {
 	for _, bin := range r.bins() {
-		for _, kind := range []string{"video", "cache", "gvt1"} {
-			rule := r.dnsRule(kind)
-			legacy := make([]string, 0, len(rule))
-			for _, arg := range rule {
-				if arg != "--icase" {
-					legacy = append(legacy, arg)
+		for _, chain := range dnsChains {
+			for _, kind := range []string{"video", "cache", "gvt1"} {
+				rule := r.dnsRule(kind)
+				legacy := make([]string, 0, len(rule))
+				for _, arg := range rule {
+					if arg != "--icase" {
+						legacy = append(legacy, arg)
+					}
 				}
-			}
-			for _, shape := range [][]string{rule, legacy} {
-				del := append([]string{"-w", "-t", "mangle", "-D", "OUTPUT"}, shape...)
-				for i := 0; i < 8 && r.run(bin, del...) == nil; i++ {
+				for _, shape := range [][]string{rule, legacy} {
+					del := append([]string{"-w", "-t", "mangle", "-D", chain}, shape...)
+					for i := 0; i < 8 && r.run(bin, del...) == nil; i++ {
+					}
 				}
 			}
 		}

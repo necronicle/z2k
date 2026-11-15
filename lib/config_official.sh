@@ -1620,11 +1620,14 @@ generate_nfqws2_opt_from_strategies() {
         # по имени DNS-вопроса до публикации IP. Уже опубликованные
         # адреса сохраняются до перезагрузки: удаление может оборвать пробу A.
         # Новый whitelist не отменяет их охват A (в том числе при общих IP).
-        if [ -n "$Z2K_PREFLIGHT_STEP" ]; then
+        local Z2K_GVSUB_IPS="${Z2K_GVSUB_IPS:-/tmp/z2k-gv-ips.txt}"
+        if [ "$Z2K_GV_SERVER_REPLY2" = "1" ] && [ "$category_youtube" != 0 ]; then
             # validate-config идёт ДО S99 start, а после reboot /tmp пуст.
-            # Подготовить файл при самой генерации, до публикации --ipset.
-            local Z2K_GVSUB_IPS="${Z2K_GVSUB_IPS:-/tmp/z2k-gv-ips.txt}"
+            # Подготовить файл при самой генерации, до публикации --ipset
+            # (как в TCP preflight, так и в UDP drop при Z2K_YT_QUIC_OFF=1).
             z2k_gvsub_ensure_ipfile
+        fi
+        if [ -n "$Z2K_PREFLIGHT_STEP" ]; then
             if [ -f "$Z2K_GVSUB_IPS" ] && [ -s "$Z2K_GVSUB_IPS" ] && [ -r "$Z2K_GVSUB_IPS" ]; then
                 add_hostlist_line "${extra_strats_dir}/TCP/YT_GV/List.txt" "--ipset=$Z2K_GVSUB_IPS $gv_ip_tcp --new"
             else
@@ -1715,6 +1718,14 @@ generate_nfqws2_opt_from_strategies() {
     elif [ "$yt_quic_off" = "1" ] && [ "$category_youtube" != 0 ] \
          && [ -s "${extra_strats_dir}/UDP/YT/List.txt" ]; then
         nfqws2_opt_lines="$nfqws2_opt_lines$wl_excl --hostlist=${extra_strats_dir}/UDP/YT/List.txt $quic_drop\\n"
+        # Мобильные клиенты и Smart TV отправляют фрагментированный/0-RTT/повторный
+        # UDP:443 трафик к узлам googlevideo, не всегда распознаваемый как одиночный
+        # quic_initial с SNI. Сброс по IP из gvsub (уже отфильтрованным по whitelist
+        # и сетям Google) мгновенно переводит плеер на TCP.
+        if [ "$Z2K_GV_SERVER_REPLY2" = "1" ] \
+           && [ -f "$Z2K_GVSUB_IPS" ] && [ -s "$Z2K_GVSUB_IPS" ] && [ -r "$Z2K_GVSUB_IPS" ]; then
+            nfqws2_opt_lines="$nfqws2_opt_lines--ipset=$Z2K_GVSUB_IPS --filter-udp=443 --lua-desync=drop --new\\n"
+        fi
     fi
 
     local quic_lists="" quic_anchor=""

@@ -13,3 +13,4 @@ youtube.googleapis.com
 youtubei.googleapis.com
 accounts.youtube.com
 oauth2.googleapis.com
+youtube-nocookie.com

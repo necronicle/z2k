@@ -104,5 +104,225 @@ for root in default "$TMP/custom root"; do
         || bad "start gvsub: whitelist '$got', нужен '$want'"
 done
 
+# --- 10. Транзитный DNS (Smart TV / телефоны): mangle OUTPUT + FORWARD --------
+{
+    fn z2k_gvsub_enabled
+    fn z2k_gvsub_dns_rule
+    fn z2k_gvsub_legacy_purge
+    fn z2k_gvsub_fw_stop
+    fn z2k_gvsub_fw_start
+} > "$TMP/fw_fns.sh"
+
+mkdir -p "$TMP/fwstate"
+cat > "$TMP/fw_mock.py" <<'PYMOCK'
+#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+
+p = Path(os.environ["FW_STATE"])
+st = json.loads(p.read_text()) if p.exists() else {}
+fam = sys.argv[1]
+args = sys.argv[2:]
+if len(args) < 4 or args[0] != "-t":
+    sys.exit(2)
+table, op, chain = args[1], args[2], args[3]
+key = f"{fam}/{table}/{chain}"
+rules = st.setdefault(key, [])
+if op == "-C":
+    spec = " ".join(args[4:])
+    sys.exit(0 if spec in rules else 1)
+elif op == "-I":
+    spec = " ".join(args[5:])
+    rules.insert(0, spec)
+elif op == "-D":
+    spec = " ".join(args[4:])
+    if spec not in rules:
+        sys.exit(1)
+    rules.remove(spec)
+elif op in ("-F", "-X"):
+    st.pop(key, None)
+p.write_text(json.dumps(st))
+PYMOCK
+chmod +x "$TMP/fw_mock.py"
+
+FW_STATE="$TMP/fwstate/state.json"
+export FW_STATE
+(
+    . "$TMP/fw_fns.sh"
+    printf '#!/bin/sh\necho gvsub\n' > "$TMP/gvbin"
+    chmod +x "$TMP/gvbin"
+    Z2K_GVSUB_BIN="$TMP/gvbin"
+    Z2K_GVSUB_QUEUE=210
+    Z2K_GVSUB_CHAIN=Z2K_GVSUB
+    Z2K_GVSUB_PID="$TMP/no.pid"
+    Z2K_GV_SERVER_REPLY2=1
+    FWTYPE=iptables
+    DISABLE_IPV6=0
+    z2k_insmod_fw() { :; }
+    iptablesw()  { python3 "$TMP/fw_mock.py" iptablesw  "$@"; }
+    ip6tablesw() { python3 "$TMP/fw_mock.py" ip6tablesw "$@"; }
+    # Старая форма без --icase в FORWARD должна очищаться при старте.
+    python3 - "$FW_STATE" <<'PYSEED'
+import json, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+    "iptablesw/mangle/FORWARD": [
+        "! -o lo -p udp --sport 53 -m string --algo bm --string googlevideo -j NFQUEUE --queue-num 210 --queue-bypass"
+    ]
+}))
+PYSEED
+    z2k_gvsub_fw_start
+    z2k_gvsub_fw_start
+)
+python3 - "$FW_STATE" <<'PYCHK1'
+import json, sys
+from pathlib import Path
+st = json.loads(Path(sys.argv[1]).read_text())
+for fam in ("iptablesw", "ip6tablesw"):
+    for ch in ("OUTPUT", "FORWARD"):
+        rules = st.get(f"{fam}/mangle/{ch}", [])
+        assert len(rules) == 3, f"{fam}/mangle/{ch}: {rules}"
+        assert all("--icase" in r and "--queue-num 210 --queue-bypass" in r for r in rules), rules
+PYCHK1
+[ "$?" -eq 0 ] && ok "fw_start идемпотентно ставит 3 правила очереди 210 в OUTPUT и FORWARD (IPv4/IPv6)" \
+    || bad "fw_start не обеспечил по 3 актуальных правила в OUTPUT и FORWARD"
+
+(
+    . "$TMP/fw_fns.sh"
+    Z2K_GVSUB_QUEUE=210
+    Z2K_GVSUB_CHAIN=Z2K_GVSUB
+    DISABLE_IPV6=0
+    iptablesw()  { python3 "$TMP/fw_mock.py" iptablesw  "$@"; }
+    ip6tablesw() { python3 "$TMP/fw_mock.py" ip6tablesw "$@"; }
+    z2k_gvsub_fw_stop
+)
+python3 - "$FW_STATE" <<'PYCHK2'
+import json, sys
+from pathlib import Path
+st = json.loads(Path(sys.argv[1]).read_text())
+for fam in ("iptablesw", "ip6tablesw"):
+    for ch in ("OUTPUT", "FORWARD"):
+        rules = st.get(f"{fam}/mangle/{ch}", [])
+        assert rules == [], f"остались правила в {fam}/mangle/{ch}: {rules}"
+PYCHK2
+[ "$?" -eq 0 ] && ok "fw_stop снимает все правила очереди 210 и из OUTPUT, и из FORWARD" \
+    || bad "fw_stop оставил правила в OUTPUT или FORWARD"
+
+# --- 11. Диагностика z2k-diag.sh: print_gvsub и print_health ------------------
+DIAG="$ROOT/files/z2k-diag.sh"
+awk '/^print_gvsub\(\)/{p=1} p{print} p&&/^}/{exit}' "$DIAG" > "$TMP/diag_gvsub.sh"
+awk '/^print_health\(\)/{p=1} p{print} p&&/^}/{exit}' "$DIAG" > "$TMP/diag_health.sh"
+
+mkdir -p "$TMP/droot/lua" "$TMP/droot/extra_strats/TCP/RKN" "$TMP/dbin"
+: > "$TMP/droot/lua/z2k-preflight.lua"
+awk 'BEGIN{for(i=1;i<=1005;i++) print "d"i".example.com"}' > "$TMP/droot/extra_strats/TCP/RKN/List.txt"
+printf '0.0.0.0/32\n::/128\n74.125.110.70\n2a00:1450:4001::9\n' > "$TMP/gv-ips-diag.txt"
+printf '#!/bin/sh\necho gvsub\n' > "$TMP/dbin/gvsub-bin"
+chmod +x "$TMP/dbin/gvsub-bin"
+
+cat > "$TMP/dbin/iptables" <<'STUB'
+#!/bin/sh
+emit3() {
+    echo "-A $1 ! -o lo -p udp -m udp --sport 53 -m string --string \"googlevideo\" --algo bm --icase -j NFQUEUE --queue-num 210 --queue-bypass"
+    echo "-A $1 ! -o lo -p udp -m udp --sport 53 -m string --hex-string \"|016307796f757475626503636f6d00|\" --algo bm --icase -j NFQUEUE --queue-num 210 --queue-bypass"
+    echo "-A $1 ! -o lo -p udp -m udp --sport 53 -m string --hex-string \"|046776743103636f6d00|\" --algo bm --icase -j NFQUEUE --queue-num 210 --queue-bypass"
+}
+case "$*" in
+    *"-t mangle -S OUTPUT"*)  emit3 OUTPUT ;;
+    *"-t mangle -S FORWARD"*)
+        case "${MOCK_FWD_MODE:-3}" in
+            0) ;;
+            1) echo "-A FORWARD ! -o lo -p udp -m udp --sport 53 -m string --string \"googlevideo\" --algo bm --icase -j NFQUEUE --queue-num 210 --queue-bypass" ;;
+            *) emit3 FORWARD ;;
+        esac
+        ;;
+esac
+exit 0
+STUB
+cp "$TMP/dbin/iptables" "$TMP/dbin/ip6tables"
+cat > "$TMP/dbin/ip" <<'STUB'
+#!/bin/sh
+case "$*" in
+    "-6 route show default") [ "${MOCK_V6_LEAK:-0}" = 1 ] && echo "default via fe80::1 dev eth3 metric 1024" ;;
+    "-6 -o addr show scope global") [ "${MOCK_V6_LEAK:-0}" = 1 ] && echo "2: br0    inet6 2a00:1450:4001::1/64 scope global" ;;
+esac
+exit 0
+STUB
+chmod +x "$TMP/dbin/iptables" "$TMP/dbin/ip6tables" "$TMP/dbin/ip"
+
+printf '%s\n' "$$" > "$TMP/live.pid"
+GVSUB_OUT=$(
+    PATH="$TMP/dbin:$PATH"
+    ZAPRET2_DIR="$TMP/droot"
+    Z2K_GVSUB_PID="$TMP/live.pid"
+    Z2K_GVSUB_IPS="$TMP/gv-ips-diag.txt"
+    Z2K_GVSUB_STATUS="$TMP/none.json"
+    Z2K_GVSUB_LOG="$TMP/none.log"
+    printf 'DISABLE_IPV6=0\n' > "$TMP/droot/config"
+    . "$TMP/diag_gvsub.sh"
+    print_gvsub
+)
+has "адресов видео     : 2 " "$GVSUB_OUT" && has "-A FORWARD" "$GVSUB_OUT" \
+    && ok "print_gvsub показывает число накопленных IP (без sentinels) и очередь в FORWARD" \
+    || bad "print_gvsub не показал число IP или FORWARD: $GVSUB_OUT"
+
+run_health() {
+    (
+        PATH="$TMP/dbin:$PATH"
+        export MOCK_FWD_MODE="${2:-3}" MOCK_V6_LEAK="${3:-0}"
+        ZAPRET2_DIR="$TMP/droot"
+        Z2K_GVSUB_BIN="$TMP/dbin/gvsub-bin"
+        Z2K_GVSUB_PID="$4"
+        printf '%s\n' "$1" > "$TMP/droot/config"
+        mount() { echo "tmpfs on /opt type tmpfs (rw)"; }
+        bitmap_port_ok() { echo yes; }
+        pgrep() { echo 4242; }
+        nfqueue_counts() { echo "2 4 1"; }
+        df() { printf 'Filesystem 1K-blocks Used Available Use%%\n/dev/sda1 100000 1000 90000 1%%\n'; }
+        nfqws_strategy_counts() { echo "10 3 0"; }
+        nfqws_reasm_state() { echo off; }
+        nfqws_first_packets_state() { echo 0; }
+        clock_skew_vs_relay() { echo 0; }
+        tg_user_disabled() { return 0; }
+        . "$TMP/diag_health.sh"
+        print_health
+    )
+}
+
+H_OK=$(run_health "DISABLE_IPV6=0" 3 1 "$TMP/live.pid")
+if ! has "DISABLE_IPV6=1" "$H_OK" && ! has "gvsub" "$H_OK" && ! has "очереди DNS YouTube" "$H_OK"; then
+    ok "print_health молчит по YouTube/gvsub, когда IPv6 включён в z2k, gvsub работает и все 3/3 правила стоят"
+else
+    bad "ложное срабатывание print_health: $H_OK"
+fi
+
+H_NFT=$(run_health "$(printf 'DISABLE_IPV6=0\nFWTYPE=nftables')" 0 0 "$TMP/dead.pid")
+if ! has "gvsub" "$H_NFT" && ! has "очереди DNS YouTube" "$H_NFT"; then
+    ok "print_health не требует iptables-службу gvsub на стендах с FWTYPE=nftables"
+else
+    bad "ложное срабатывание print_health при FWTYPE=nftables: $H_NFT"
+fi
+
+H_V6=$(run_health "DISABLE_IPV6=1" 3 1 "$TMP/live.pid")
+has "DISABLE_IPV6=1 в конфиге z2k, но на роутере активен глобальный IPv6" "$H_V6" \
+    && ok "print_health ловит утечку YouTube по глобальному IPv6 при DISABLE_IPV6=1" \
+    || bad "print_health не поймал утечку по IPv6: $H_V6"
+
+H_DOWN=$(run_health "DISABLE_IPV6=0" 3 0 "$TMP/dead.pid")
+has "служба DNS-наблюдения YouTube (z2k-detect gvsub) не запущена" "$H_DOWN" \
+    && ok "print_health ловит остановленную службу gvsub" \
+    || bad "print_health не поймал остановленный gvsub: $H_DOWN"
+
+H_NOFWD=$(run_health "DISABLE_IPV6=0" 0 0 "$TMP/live.pid")
+has "правила очереди DNS YouTube (210) неполные (OUTPUT=3/3, FORWARD=0/3)" "$H_NOFWD" \
+    && ok "print_health ловит отсутствие правил очереди 210 в mangle FORWARD" \
+    || bad "print_health не поймал отсутствие правил в FORWARD: $H_NOFWD"
+
+H_PARTFWD=$(run_health "DISABLE_IPV6=0" 1 0 "$TMP/live.pid")
+has "правила очереди DNS YouTube (210) неполные (OUTPUT=3/3, FORWARD=1/3)" "$H_PARTFWD" \
+    && ok "print_health ловит частичную потерю правил очереди 210 (1/3) в mangle FORWARD" \
+    || bad "print_health не поймал частичную потерю правил в FORWARD: $H_PARTFWD"
+
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
+

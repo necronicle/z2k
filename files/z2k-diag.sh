@@ -916,17 +916,33 @@ print_preflight() {
 # DNS-наблюдение YouTube/Google Play: IP preflight.
 print_gvsub() {
     printf '\n=== DNS YouTube и Google Play ===\n'
-    local pid; pid=$(cat /var/run/z2k-gvsub.pid 2>/dev/null)
+    local pid; pid=$(cat "${Z2K_GVSUB_PID:-/var/run/z2k-gvsub.pid}" 2>/dev/null)
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
         printf 'служба            : работает (PID %s)\n' "$pid"
     else
         printf 'служба            : НЕ РАБОТАЕТ\n'
     fi
-    printf 'очередь DNS:\n'
+    local ips="${Z2K_GVSUB_IPS:-/tmp/z2k-gv-ips.txt}"
+    if [ -f "$ips" ]; then
+        local ips_n
+        ips_n=$(awk '!/^[[:space:]]*(#|$)/ && $0 != "0.0.0.0/32" && $0 != "::/128" {n++} END {print n+0}' "$ips" 2>/dev/null)
+        printf 'адресов видео     : %s (%s)\n' "${ips_n:-0}" "$ips"
+    else
+        printf 'адресов видео     : нет файла (%s)\n' "$ips"
+    fi
+    printf 'очередь DNS (IPv4 OUTPUT / FORWARD):\n'
     iptables -w -t mangle -S OUTPUT 2>/dev/null | grep -- '--queue-num 210'
-    local f=/tmp/z2k-gvsub.json
+    iptables -w -t mangle -S FORWARD 2>/dev/null | grep -- '--queue-num 210'
+    local dis6
+    dis6=$(sed -n 's/^DISABLE_IPV6=//p' "${ZAPRET2_DIR}/config" 2>/dev/null | tail -n 1 | tr -d "\"' ")
+    if [ "$dis6" != "1" ] && command -v ip6tables >/dev/null 2>&1; then
+        printf 'очередь DNS (IPv6 OUTPUT / FORWARD):\n'
+        ip6tables -w -t mangle -S OUTPUT 2>/dev/null | grep -- '--queue-num 210'
+        ip6tables -w -t mangle -S FORWARD 2>/dev/null | grep -- '--queue-num 210'
+    fi
+    local f="${Z2K_GVSUB_STATUS:-/tmp/z2k-gvsub.json}"
     [ ! -f "$f" ] || { printf '%s:\n' "$f"; sed 's/^/    /' "$f"; }
-    tail -n 20 /tmp/z2k-log/gvsub.log 2>/dev/null | sed 's/^/    журнал: /'
+    tail -n 20 "${Z2K_GVSUB_LOG:-/tmp/z2k-log/gvsub.log}" 2>/dev/null | sed 's/^/    журнал: /'
 }
 
 # Число записей в каталоге (0, если его нет). Глоб, а не `ls | grep -c`.
@@ -1542,6 +1558,47 @@ print_health() {
         _warp_why=$(warp_register_reason)
         if [ -n "$_warp_why" ]; then
             _add "WARP не включится: устройство не зарегистрировано у Cloudflare ($_warp_why) — после устранения нажмите «Установить WARP» в панели"
+        fi
+    fi
+
+    # YouTube на Smart TV и мобильных устройствах: две типовые причины, при
+    # которых движок запущен и правила основного конвейера на месте, а ролики
+    # всё равно виснут на старте:
+    #   1) в z2k выключен IPv6 (DISABLE_IPV6=1), но провайдер раздаёт глобальный
+    #      IPv6 — смартфоны и ТВ уходят на googlevideo по IPv6 мимо обхода;
+    #   2) включён обход по ответу сервера, но служба gvsub остановлена или нет
+    #      правил очереди 210 в mangle OUTPUT / FORWARD.
+    local _yt_cat _dis6 _gv_reply _fwtype
+    _yt_cat=$(sed -n 's/^Z2K_CATEGORY_YOUTUBE=//p' "${ZAPRET2_DIR}/config" 2>/dev/null | tail -n 1 | tr -d "\"' ")
+    _dis6=$(sed -n 's/^DISABLE_IPV6=//p' "${ZAPRET2_DIR}/config" 2>/dev/null | tail -n 1 | tr -d "\"' ")
+    _gv_reply=$(sed -n 's/^Z2K_GV_SERVER_REPLY2=//p' "${ZAPRET2_DIR}/config" 2>/dev/null | tail -n 1 | tr -d "\"' ")
+    _fwtype=$(sed -n 's/^FWTYPE=//p' "${ZAPRET2_DIR}/config" 2>/dev/null | tail -n 1 | tr -d "\"' ")
+    if [ "${_yt_cat:-1}" != "0" ] && [ "$_dis6" = "1" ] && command -v ip >/dev/null 2>&1; then
+        if ip -6 route show default 2>/dev/null | grep -q '^default ' \
+           && ip -6 -o addr show scope global 2>/dev/null | grep -qE 'inet6 [23][0-9a-fA-F]*:'; then
+            _add "DISABLE_IPV6=1 в конфиге z2k, но на роутере активен глобальный IPv6 — смартфоны и Smart TV уходят на googlevideo по IPv6 мимо обхода (включите IPv6 в z2k или отключите IPv6 у провайдера)"
+        fi
+    fi
+    if [ -n "$_nfq_pid" ] && [ "${_fwtype:-iptables}" = "iptables" ] \
+       && [ "${_yt_cat:-1}" != "0" ] && [ "${_gv_reply:-1}" != "0" ] \
+       && [ -f "${ZAPRET2_DIR}/lua/z2k-preflight.lua" ]; then
+        local _gv_bin="${Z2K_GVSUB_BIN:-/opt/sbin/z2k-detect}"
+        if [ -x "$_gv_bin" ] && "$_gv_bin" 2>&1 | grep -q "gvsub"; then
+            local _gv_pid
+            _gv_pid=$(cat "${Z2K_GVSUB_PID:-/var/run/z2k-gvsub.pid}" 2>/dev/null)
+            if [ -z "$_gv_pid" ] || ! kill -0 "$_gv_pid" 2>/dev/null; then
+                _add "служба DNS-наблюдения YouTube (z2k-detect gvsub) не запущена — первые соединения Smart TV и телефонов к новым серверам googlevideo идут без проверки по ответу сервера"
+            elif command -v iptables >/dev/null 2>&1; then
+                local _gvo _gvf _gvo_n _gvf_n
+                if _gvo=$(iptables -w -t mangle -S OUTPUT 2>/dev/null) \
+                   && _gvf=$(iptables -w -t mangle -S FORWARD 2>/dev/null); then
+                    _gvo_n=$(printf '%s\n' "$_gvo" | grep -c -- '--queue-num 210' || true)
+                    _gvf_n=$(printf '%s\n' "$_gvf" | grep -c -- '--queue-num 210' || true)
+                    if [ "${_gvo_n:-0}" -lt 3 ] || [ "${_gvf_n:-0}" -lt 3 ]; then
+                        _add "правила очереди DNS YouTube (210) неполные (OUTPUT=${_gvo_n:-0}/3, FORWARD=${_gvf_n:-0}/3) — ответы DNS от роутера или устройств со своим DNS (Smart TV, телефоны) не попадают в список адресов видео"
+                    fi
+                fi
+            fi
         fi
     fi
 

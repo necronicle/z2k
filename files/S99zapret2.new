@@ -3070,10 +3070,12 @@ z2k_gvsub_enabled()
 
 z2k_gvsub_dns_rule()
 {
-    # $1 — iptablesw|ip6tablesw, $2 — -C|-I|-D
+    # $1 — iptablesw|ip6tablesw, $2 — -C|-I|-D, $3 — video|cache|gvt1,
+    # $4 — current|legacy, $5 — цепочка mangle (OUTPUT|FORWARD, по умолчанию OUTPUT).
     # ! -o lo: ответы на собственные запросы службы (имена машин кластера
-    # googlevideo) идут через lo и придерживаться не должны.
-    local match=--string value=googlevideo icase=--icase
+    # googlevideo) идут через lo и придерживаться не должны; для транзитных
+    # ответов в FORWARD исходящий интерфейс — br0/LAN (не lo).
+    local match=--string value=googlevideo icase=--icase chain="${5:-OUTPUT}"
     [ "${4:-}" != legacy ] || icase=""
     if [ "${3:-}" = cache ]; then
         match=--hex-string
@@ -3084,10 +3086,10 @@ z2k_gvsub_dns_rule()
     fi
     # shellcheck disable=SC2086 # optional --icase, empty for legacy deletion
     if [ "$2" = "-I" ]; then
-        "$1" -t mangle -I OUTPUT 1 ! -o lo -p udp --sport 53 -m string --algo bm $icase "$match" "$value" \
+        "$1" -t mangle -I "$chain" 1 ! -o lo -p udp --sport 53 -m string --algo bm $icase "$match" "$value" \
             -j NFQUEUE --queue-num "$Z2K_GVSUB_QUEUE" --queue-bypass
     else
-        "$1" -t mangle "$2" OUTPUT ! -o lo -p udp --sport 53 -m string --algo bm $icase "$match" "$value" \
+        "$1" -t mangle "$2" "$chain" ! -o lo -p udp --sport 53 -m string --algo bm $icase "$match" "$value" \
             -j NFQUEUE --queue-num "$Z2K_GVSUB_QUEUE" --queue-bypass
     fi
 }
@@ -3097,17 +3099,18 @@ z2k_gvsub_fw_start()
     z2k_gvsub_legacy_purge
     z2k_gvsub_enabled || { z2k_gvsub_fw_stop; return 0; }
     grep -qw string /proc/net/ip_tables_matches 2>/dev/null || z2k_insmod_fw xt_string || true
-    local T
+    local T chain kind
     for T in iptablesw ip6tablesw; do
         [ "$T" = ip6tablesw ] && [ "$DISABLE_IPV6" = "1" ] && continue
-        # Remove exact pre-123 match forms before adding the current rules.
-        local kind
-        for kind in video cache gvt1; do
-            while z2k_gvsub_dns_rule "$T" -D "$kind" legacy 2>/dev/null; do :; done
+        for chain in OUTPUT FORWARD; do
+            # Снять старые формы без --icase до постановки актуальных правил.
+            for kind in video cache gvt1; do
+                while z2k_gvsub_dns_rule "$T" -D "$kind" legacy "$chain" 2>/dev/null; do :; done
+            done
+            z2k_gvsub_dns_rule "$T" -C video current "$chain" 2>/dev/null || z2k_gvsub_dns_rule "$T" -I video current "$chain"
+            z2k_gvsub_dns_rule "$T" -C cache current "$chain" 2>/dev/null || z2k_gvsub_dns_rule "$T" -I cache current "$chain"
+            z2k_gvsub_dns_rule "$T" -C gvt1 current "$chain" 2>/dev/null || z2k_gvsub_dns_rule "$T" -I gvt1 current "$chain"
         done
-        z2k_gvsub_dns_rule "$T" -C 2>/dev/null || z2k_gvsub_dns_rule "$T" -I
-        z2k_gvsub_dns_rule "$T" -C cache 2>/dev/null || z2k_gvsub_dns_rule "$T" -I cache
-        z2k_gvsub_dns_rule "$T" -C gvt1 2>/dev/null || z2k_gvsub_dns_rule "$T" -I gvt1
     done
     # Служба восстанавливает DNS-перехват после перестройки таблиц Keenetic.
     [ -f "$Z2K_GVSUB_PID" ] && kill -HUP "$(cat "$Z2K_GVSUB_PID")" 2>/dev/null
@@ -3137,13 +3140,14 @@ z2k_gvsub_legacy_purge()
 z2k_gvsub_fw_stop()
 {
     z2k_gvsub_legacy_purge
-    local T
+    local T chain kind shape
     for T in iptablesw ip6tablesw; do
         [ "$T" = ip6tablesw ] && [ "$DISABLE_IPV6" = "1" ] && continue
-        local kind shape
-        for kind in video cache gvt1; do
-            for shape in current legacy; do
-                while z2k_gvsub_dns_rule "$T" -D "$kind" "$shape" 2>/dev/null; do :; done
+        for chain in OUTPUT FORWARD; do
+            for kind in video cache gvt1; do
+                for shape in current legacy; do
+                    while z2k_gvsub_dns_rule "$T" -D "$kind" "$shape" "$chain" 2>/dev/null; do :; done
+                done
             done
         done
     done

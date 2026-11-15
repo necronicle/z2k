@@ -137,5 +137,64 @@ for r in yt-quic-off:toggle_yt_quic_off quic-off:toggle_quic_off; do
         && ok "маршрут /toggle/${r%%:*} ведёт в ${r#*:}" || bad "нет маршрута /toggle/${r%%:*}"
 done
 
+# --- 6. Сброс UDP:443 по IP видеосерверов (gvsub) и youtube-nocookie.com -------
+grep -qxF 'youtube-nocookie.com' "$ROOT/files/lists/extra_strats/UDP/YT/List.txt" \
+    && ok "youtube-nocookie.com входит в офлайн-список UDP/YT/List.txt" \
+    || bad "youtube-nocookie.com отсутствует в UDP/YT/List.txt"
+
+GV_IPS_TEST="$TMP/gv-ips-yt.txt"
+OUT_IPSET=$(
+    root=$(mkroot "yt-ipset")
+    printf 'Z2K_YT_QUIC_OFF=1\nZ2K_GV_SERVER_REPLY2=1\n' >> "$root/config"
+    ZAPRET2_DIR="$root" Z2K_GVSUB_IPS="$GV_IPS_TEST" generate_nfqws2_opt_from_strategies 2>/dev/null \
+        | awk -f "$ROOT/tests/lib/nfqws2_flatten.awk"
+)
+if [ -f "$GV_IPS_TEST" ] && grep -qxF '0.0.0.0/32' "$GV_IPS_TEST" && grep -qxF '::/128' "$GV_IPS_TEST"; then
+    ok "генератор подготовил sentinels в Z2K_GVSUB_IPS для UDP drop"
+else
+    bad "sentinels не подготовлены в $GV_IPS_TEST"
+fi
+IPSET_DROP=$(printf '%s\n' "$OUT_IPSET" | grep -F -- "--ipset=$GV_IPS_TEST" | head -1)
+if [ -n "$IPSET_DROP" ]; then
+    has "--filter-udp=443" "$IPSET_DROP" && has "--lua-desync=drop" "$IPSET_DROP" \
+        && ok "при Z2K_YT_QUIC_OFF=1 добавлен страхующий drop по --ipset на UDP:443" \
+        || bad "неверные параметры страхующего профиля: $IPSET_DROP"
+    has "--hostlist" "$IPSET_DROP" \
+        && bad "в профиле --ipset есть hostlist (отвергал бы потоки без SNI): $IPSET_DROP" \
+        || ok "профиль --ipset работает без hostlist/hostlist-exclude"
+    has "--filter-l7=quic" "$IPSET_DROP" \
+        && bad "профиль --ipset ограничен quic_initial (пропускал бы фрагменты/0-RTT): $IPSET_DROP" \
+        || ok "профиль --ipset режет любые UDP:443 пакеты к узлам видео"
+    HL_L=$(line_of '/UDP/YT/List.txt --filter-udp=443 --filter-l7=quic' "$OUT_IPSET")
+    IP_L=$(line_of "--ipset=$GV_IPS_TEST" "$OUT_IPSET")
+    QU_L=$(line_of 'key=quic' "$OUT_IPSET")
+    [ -n "$HL_L" ] && [ -n "$IP_L" ] && [ -n "$QU_L" ] && [ "$HL_L" -lt "$IP_L" ] && [ "$IP_L" -lt "$QU_L" ] \
+        && ok "профиль --ipset стоит сразу после hostlist-drop и перед обходом QUIC" \
+        || bad "неверный порядок профилей: hostlist=$HL_L ipset=$IP_L quic=$QU_L"
+else
+    bad "нет профиля --ipset для Z2K_YT_QUIC_OFF=1"
+fi
+
+OUT_NOGV=$(
+    root=$(mkroot "yt-nogv")
+    printf 'Z2K_YT_QUIC_OFF=1\nZ2K_GV_SERVER_REPLY2=0\n' >> "$root/config"
+    ZAPRET2_DIR="$root" Z2K_GVSUB_IPS="$TMP/nogv-ips.txt" generate_nfqws2_opt_from_strategies 2>/dev/null \
+        | awk -f "$ROOT/tests/lib/nfqws2_flatten.awk"
+)
+has "--ipset=" "$OUT_NOGV" \
+    && bad "при Z2K_GV_SERVER_REPLY2=0 добавлен --ipset в UDP drop" \
+    || ok "при Z2K_GV_SERVER_REPLY2=0 страхующий --ipset не ставится"
+
+GV_CATOFF_IPS="$TMP/catoff-gv-ips.txt"
+(
+    root=$(mkroot "yt-catoff-ipset")
+    printf 'Z2K_YT_QUIC_OFF=1\nZ2K_GV_SERVER_REPLY2=1\nZ2K_CATEGORY_YOUTUBE=0\n' >> "$root/config"
+    ZAPRET2_DIR="$root" Z2K_GVSUB_IPS="$GV_CATOFF_IPS" generate_nfqws2_opt_from_strategies >/dev/null 2>&1
+)
+[ ! -e "$GV_CATOFF_IPS" ] \
+    && ok "при Z2K_CATEGORY_YOUTUBE=0 генератор не создаёт файл Z2K_GVSUB_IPS" \
+    || bad "при Z2K_CATEGORY_YOUTUBE=0 создан лишний файл $GV_CATOFF_IPS"
+
 printf '\nИТОГ: %s PASS, %s FAIL\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
+
