@@ -257,18 +257,48 @@ menu_diag() {
     print_header "[D] Диагностика"
 
     local diag="${ZAPRET2_DIR}/z2k-diag.sh"
+    local dnscheck="${ZAPRET2_DIR}/z2k-dns-check.sh"
 
-    if [ ! -f "$diag" ]; then
-        print_error "Скрипт диагностики не найден: $diag"
-        print_info "Переустановите z2k или обновите tools"
-        pause
-        return
-    fi
+    print_info "[1] Полная сводка z2k-diag (по умолчанию — Enter)"
+    print_info "[2] Проверка DNS (обычный UDP / DoH / DoT)"
+    print_info "[0] Назад"
+    printf "> "
+    local sub
+    read_input sub
 
-    sh "$diag"
-    printf "\n"
-    print_info "Сводка готова. Скопируй вывод выше и пришли в чат проекта при необходимости."
-    pause
+    case "$sub" in
+        ""|1)
+            if [ ! -f "$diag" ]; then
+                print_error "Скрипт диагностики не найден: $diag"
+                print_info "Переустановите z2k или обновите tools"
+                pause
+                return
+            fi
+            sh "$diag"
+            printf "\n"
+            print_info "Сводка готова. Скопируй вывод выше и пришли в чат проекта при необходимости."
+            pause
+            ;;
+        2)
+            if [ ! -f "$dnscheck" ]; then
+                print_error "Скрипт проверки DNS не найден: $dnscheck"
+                print_info "Переустановите z2k или обновите tools"
+                pause
+                return
+            fi
+            print_separator
+            sh "$dnscheck" >/dev/null
+            print_separator
+            pause
+            ;;
+        0)
+            return
+            ;;
+        *)
+            print_error "Неверный выбор: $sub"
+            pause
+            ;;
+    esac
 }
 
 # ==============================================================================

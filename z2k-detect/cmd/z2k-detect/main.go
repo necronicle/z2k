@@ -99,6 +99,7 @@ commands:
   voice                     голос Дискорда; адрес берётся из ИДУЩЕГО разговора
   tcp16 [-asn N] [-scan F]  проба на блок по объёму соединения; -scan ищет проходящее имя
   dnsms -server IP           время обычного UDP-запроса к DNS, в миллисекундах
+  dnsdot -server HOST [DOM]  опрос списка имён по DoT (порт 853) с проверкой TLS
   gvsub [-queue N]           служба DNS: YouTube/Google Play и кэш провайдера`)
 }
 
@@ -128,6 +129,8 @@ func main() {
 		tcp16Cmd(ctx, args[1:])
 	case "dnsms":
 		dnsmsCmd(ctx, args[1:])
+	case "dnsdot":
+		dnsdotCmd(ctx, args[1:])
 	case "gvsub":
 		gvsubCmd(ctx, args[1:])
 	default:

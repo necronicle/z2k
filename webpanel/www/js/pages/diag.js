@@ -151,7 +151,7 @@ export async function renderDiag() {
             порт 853). Быстрый
             ответ ещё не значит правдивый: перехваченный запрос возвращается
             быстрее всех, потому что отвечает не тот, кого спросили. Ничего не
-            меняет, занимает около минуты.
+            меняет, занимает около 10–15 секунд.
           </p>
         </div>
         <button class="btn btn-primary" id="dns-run">Проверить</button>
@@ -282,6 +282,87 @@ const DNS_STATE = {
   silent: { cls: "warn", label: "нет ответа или ошибка транспорта" },
 };
 
+function dnsObsNote(o, rowState, dupAddrs) {
+  if (o.outcome === "unverified") return { cls: "warn", text: "TLS не проверен" };
+  if (o.outcome === "error") return { cls: "warn", text: "нет ответа" };
+  if (o.outcome === "no_a") return { cls: o.purpose === "youtube" ? "bad" : "warn", text: "нет A-записи" };
+  const addrs = o.addresses || [];
+  if ((rowState === "spoof" || rowState === "hijack") && o.purpose === "target" && addrs.some(ip => dupAddrs.has(ip))) {
+    return { cls: "bad", text: "подменён на заглушку" };
+  }
+  if (rowState === "proxy" && o.purpose === "proxy") {
+    return { cls: "bad", text: "отдан прокси-адрес" };
+  }
+  switch (o.comparison) {
+    case "overlap": return { cls: "good", text: "совпадает с DoH" };
+    case "consensus": return { cls: "good", text: "подтверждён эталонами" };
+    case "tls": return { cls: "good", text: "проверен по TLS" };
+    case "different": return { cls: "warn", text: "расходится с DoH" };
+    case "control": return { cls: "muted", text: "контрольный запрос" };
+    case "youtube": return { cls: "good", text: "адрес получен" };
+    case "proxy": return { cls: "muted", text: "проверка прокси" };
+    default: return { cls: "muted", text: "опрошен" };
+  }
+}
+
+function renderDnsObsBlock(x) {
+  const obs = x.obs || [];
+  if (!x.addr && !obs.length) return "";
+  const ipHits = new Map();
+  for (const o of obs) {
+    if (o.purpose !== "target") continue;
+    for (const ip of (o.addresses || [])) ipHits.set(ip, (ipHits.get(ip) || 0) + 1);
+  }
+  const dupAddrs = new Set();
+  for (const [ip, n] of ipHits.entries()) {
+    if (n >= 2) dupAddrs.add(ip);
+  }
+  const addrBar = x.addr
+    ? `<div class="dns-obs-addr"><code>${escapeHtml(x.addr)}</code><button type="button" class="dns-copy" data-copy="${escapeHtml(x.addr)}">Скопировать</button></div>`
+    : "";
+  const items = obs.map(o => {
+    const ips = (o.addresses && o.addresses.length) ? escapeHtml(o.addresses.join(", ")) : "—";
+    const note = dnsObsNote(o, x.state, dupAddrs);
+    const noteCls = note.cls === "muted" ? "dns-obs-muted" : `dns-${note.cls}`;
+    return `<div class="dns-obs-item"><code>${escapeHtml(o.domain)}</code><span class="dns-obs-ips">${ips}</span><span class="dns-obs-note ${noteCls}">${escapeHtml(note.text)}</span></div>`;
+  }).join("");
+  return `<div class="dns-obs" hidden>${addrBar}${items ? `<div class="dns-obs-list">${items}</div>` : ""}</div>`;
+}
+
+function wireDnsDetails(host) {
+  if (typeof host.addEventListener !== "function" || host._dnsWired) return;
+  host._dnsWired = true;
+  const toggleRow = (row) => {
+    if (!row || typeof row.querySelector !== "function") return;
+    const box = row.querySelector(".dns-obs");
+    if (!box) return;
+    box.hidden = !box.hidden;
+    if (row.classList && typeof row.classList.toggle === "function") row.classList.toggle("open", !box.hidden);
+    if (typeof row.setAttribute === "function") row.setAttribute("aria-expanded", box.hidden ? "false" : "true");
+  };
+  host.addEventListener("click", (ev) => {
+    const t = ev && ev.target;
+    if (!t || typeof t.closest !== "function") return;
+    const copyBtn = t.closest(".dns-copy");
+    if (copyBtn) {
+      if (typeof ev.stopPropagation === "function") ev.stopPropagation();
+      copyToClipboard((copyBtn.dataset && copyBtn.dataset.copy) || "");
+      return;
+    }
+    if (t.closest(".dns-obs")) return;
+    toggleRow(t.closest(".dns-row-exp"));
+  });
+  host.addEventListener("keydown", (ev) => {
+    if (!ev || (ev.key !== "Enter" && ev.key !== " ")) return;
+    const t = ev.target;
+    if (!t || typeof t.closest !== "function" || t.closest(".dns-copy")) return;
+    const row = t.closest(".dns-row-exp");
+    if (!row) return;
+    if (typeof ev.preventDefault === "function") ev.preventDefault();
+    toggleRow(row);
+  });
+}
+
 function dnsPathGroup(title, sub, list, openIt) {
   if (!list.length) return "";
   const bad = list.filter(x => x.state === "spoof" || x.state === "proxy").length;
@@ -308,9 +389,17 @@ function dnsPathGroup(title, sub, list, openIt) {
     // Снаружи это выглядит как «интернет есть, а видео не открывается», и по
     // состоянию пути такое не видно — путь-то в порядке.
     const yt = x.yt === "empty" ? ` <span class="dns-yt">нет адреса для youtube.com</span>` : "";
-    return `<li>
+    const details = renderDnsObsBlock(x);
+    if (!details) {
+      return `<li>
       <span>${escapeHtml(x.name)}${tag}${yt}</span>
       <span class="dns-state dns-${st.cls}">${st.label}${ms}</span>
+    </li>`;
+    }
+    return `<li class="dns-row-exp" tabindex="0" role="button" aria-expanded="false">
+      <span>${escapeHtml(x.name)}${tag}${yt}</span>
+      <span class="dns-state dns-${st.cls}">${st.label}${ms}</span>
+      ${details}
     </li>`;
   }).join("");
 
@@ -333,31 +422,38 @@ function renderDnsResult(d) {
     return;
   }
   const srv = d.servers || [];
-  // У обычного DNS время появилось: его печатает dig, если он установлен
-  // (пакет bind-dig, ставится отдельно). Нет dig — приходит null, и строка
-  // выглядит как раньше, без числа. Своими руками UDP-запрос с роутера не
-  // послать, а время nslookup врёт на порядок: он делает обратный запрос на
-  // каждый адрес ответа.
-  const plain = srv.filter(s => s.udp !== "none").map(s => ({ name: s.name, state: s.udp, ms: s.udp_ms, current: s.current, yt: s.yt }));
-  const doh = srv.filter(s => s.doh !== "none").map(s => ({ name: s.name, state: s.doh, ms: s.doh_ms, current: s.current, yt: s.yt }));
-  // У DoT время ЕСТЬ: счётчик опросов с шагом 10 мс меряет полный обмен —
-  // TCP, TLS и сам запрос. Раньше здесь стоял null, потому что я счёл
-  // измерение невозможным; невозможен был только посекундный опрос.
-  const dot = srv.filter(s => s.dot !== "none").map(s => ({ name: s.name, state: s.dot, ms: s.dot_ms, current: s.current, yt: s.yt }));
+  const obsList = d.observations || [];
+  const byPath = new Map();
+  for (const o of obsList) {
+    if (!o || o.purpose === "canary") continue;
+    const k = `${o.server}\0${o.path}`;
+    if (!byPath.has(k)) byPath.set(k, []);
+    byPath.get(k).push(o);
+  }
+  const plain = srv.filter(s => s.udp !== "none").map(s => ({
+    name: s.name, state: s.udp, ms: s.udp_ms, current: s.current, yt: s.yt,
+    addr: s.addr_udp || "", obs: byPath.get(`${s.name}\0u`) || [],
+  }));
+  const doh = srv.filter(s => s.doh !== "none").map(s => ({
+    name: s.name, state: s.doh, ms: s.doh_ms, current: s.current, yt: s.yt,
+    addr: s.addr_doh || "", obs: byPath.get(`${s.name}\0d`) || [],
+  }));
+  const dot = srv.filter(s => s.dot !== "none").map(s => ({
+    name: s.name, state: s.dot, ms: s.dot_ms, current: s.current, yt: s.yt,
+    addr: s.addr_dot ? s.addr_dot.replace(/^dot:/, "") : "",
+    obs: byPath.get(`${s.name}\0t`) || [],
+  }));
 
-  // Сводного блока здесь БОЛЬШЕ НЕТ, и это снятие, а не пропажа.
-  //
-  // Он повторял то, что и так стоит в заголовках групп: сколько путей целы,
-  // сколько подменено. Свой резолвер помечен прямо в строке, ютуб — ярлыком у
-  // имени. Единственный факт, которого больше нигде не было, — адрес заглушки;
-  // он переехал в подпись группы обычного DNS, где и объясняет её состояние.
   const who = "на пути к серверам (место не установлено)";
   const stubTail = d.stub ? ` · заглушка ${escapeHtml(d.stub)}` : "";
   const stubNote = (d.intercept ? `обнаружен перехват порта 53 ${who}` : "порт 53, без шифрования") + stubTail;
+  const hasFullDot = obsList.some(o => o && o.path === "t" && o.purpose === "target");
+  const dotNote = hasFullDot ? "запрос внутри TLS, порт 853" : "TLS, порт 853; проверяется только контрольный запрос";
+  wireDnsDetails(host);
   host.innerHTML = `
     ${dnsPathGroup("Обычный DNS", stubNote, plain, false)}
     ${dnsPathGroup("Шифрованный DoH", "запрос внутри HTTPS", doh, false)}
-    ${dnsPathGroup("Шифрованный DoT", "TLS, порт 853; проверяется только контрольный запрос", dot, false)}`;
+    ${dnsPathGroup("Шифрованный DoT", dotNote, dot, false)}`;
 }
 
 async function loadDnsLast() {

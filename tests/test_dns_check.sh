@@ -217,7 +217,7 @@ assert_eq "обнаружение прокси в main" 0 "$?"
 (
     Z2K_DNS_LIB=1 . "$S"
     nslookup() {
-        printf 'Server: 1.1.1.1\nAddress 1: 1.1.1.1 resolver\nName: target\nAddress 1: 192.0.2.4 reverse.name\nAddress 2: 192.0.2.5 other.name\n'
+        printf 'Server: 1.1.1.1\nAddress: 1.1.1.1\nName: target\nAddress 1: 192.0.2.4 reverse.name\nAddress: 192.0.2.5\n'
     }
     [ "$(udp_a 1.1.1.1 target | tr '\n' ',')" = '192.0.2.4,192.0.2.5,' ] || exit 1
     nslookup() { printf 'connection timed out'; return 1; }
@@ -330,5 +330,188 @@ if command -v node >/dev/null 2>&1; then
 else
     printf '[SKIP] панель DNS: нет node; в CI проверяется\n'
 fi
+
+# Валидация своих серверов: IPv6 принимается, пустые ссылки, ведущие нули и кривые октеты отвергаются.
+_res=$(printf '2606:4700:4700::1111\n2001:4860:4860::8888\n45.90.28.0\ndot:2606:4700:4700::1111\nhttps://[2606:4700:4700::1111]/dns-query' \
+    | sh -c "DNS_CHECK_OWN=$_ow/v6.txt; $_save; dns_check_own_save" 2>/dev/null)
+assert_eq "валидные IPv6/IPv4 с 0/DoH/DoT сохраняются" "entries=5 dropped=0" "$_res"
+_res=$(printf 'https://\nhttps:///dns-query\nhttps://-bad.example.org/q\nhttps://user@dns.example/q\n999.999.999.999\n010.010.010.010\n1.2.3.08\n1.2.3.\ndot:999.999.999.999\n2001::1::2\ngggg::1' \
+    | sh -c "DNS_CHECK_OWN=$_ow/bad2.txt; $_save; dns_check_own_save" 2>/dev/null)
+assert_eq "пустые https://, ведущие нули, кривые октеты и битые IPv6 отброшены" "entries=0 dropped=11" "$_res"
+
+# IPv6 в resolv.conf (%iface), _resolve_set и dot_alive с -ign_eof / -CAfile.
+(
+    Z2K_DNS_LIB=1 . "$S"
+    printf 'nameserver fe80::1%%br0\n' > "$SB/resolv.v6"
+    [ "$(Z2K_DNS_RESOLV_CONF="$SB/resolv.v6" current_resolver)" = "fe80::1" ] || exit 1
+    _resolve_set "https://dns.google/dns-query" "2001:4860:4860::8888"
+    [ "$_RIP" = "[2001:4860:4860::8888]" ] || exit 1
+    printf 'CERT\n' > "$SB/ca.pem"
+    TIMEOUT=1
+    openssl() {
+        if [ "$2" = -help ]; then
+            printf '%s' '-verify_return_error -verify_hostname -verify_ip -servername -ign_eof -CAfile'
+            return 0
+        fi
+        printf '%s\n' "$*" > "$SB/tls-v6-args"
+        cat "$SB/dot-wire"
+    }
+    Z2K_DNS_CAFILE="$SB/ca.pem" dot_alive 2606:4700:4700::1111 || exit 1
+    for flag in '-ign_eof' "-CAfile $SB/ca.pem" '-verify_ip 2606:4700:4700::1111' '-connect [2606:4700:4700::1111]:853'; do
+        grep -F -q -- "$flag" "$SB/tls-v6-args" || exit 1
+    done
+)
+assert_eq "IPv6 резолвер и флаги -ign_eof/-CAfile в dot_alive" 0 "$?"
+
+# CDN-домен: два независимых DoH-оператора дают разные адреса одной /24, роутер получает третий узел той же /24.
+python3 - "$ROOT/tests/fixtures/dns-check/user.tsv" "$SB/cdn_s24.tsv" <<'PYCDNS24'
+from pathlib import Path
+import sys
+rows = [x.split('|') for x in Path(sys.argv[1]).read_text().splitlines()]
+out = []
+for n, d, u, h in rows:
+    if d == 'shikimori.one':
+        if n == 'Cloudflare': h = '188.114.96.1'
+        elif n == 'Google': h = '188.114.96.2'
+        elif n == 'router': u = '188.114.96.77'
+        else: h = '104.21.55.' + str(len(n))
+    out.append('|'.join((n, d, u, h)))
+Path(sys.argv[2]).write_text('\n'.join(out) + '\n')
+PYCDNS24
+run_fixture cdn_s24 "$SB/cdn_s24.tsv"
+python3 - "$SB/cdn_s24.json" <<'PYCDNS24CHK'
+import json, sys
+from pathlib import Path
+d = json.loads(Path(sys.argv[1]).read_text())
+r = next(s for s in d['servers'] if s['current'])
+assert r['udp'] == 'works', r
+obs = [o for o in d['observations'] if o['server'] == r['name'] and o['domain'] == 'shikimori.one']
+assert len(obs) == 1 and obs[0]['comparison'] == 'consensus', obs
+PYCDNS24CHK
+assert_eq "CDN /24 с двумя независимыми эталонами не даёт ложный mismatch" 0 "$?"
+
+# Полноценный DoT через z2k-detect dnsdot + параллельный опрос с сохранением порядка, addr_* и unverified.
+cat > "$SB/fake-z2k-detect" <<'EOF'
+#!/bin/sh
+if [ "${1:-}" = "-h" ]; then
+    printf 'dnsdot -server HOST\n'
+    exit 0
+fi
+[ "${1:-}" = "dnsdot" ] || exit 1
+shift
+srv=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -server) shift; srv="$1" ;;
+        -addr|-timeout|-cafile) shift ;;
+        control:*|target:*|proxy:*|youtube:*) break ;;
+    esac
+    shift
+done
+[ "$srv" != "noroot.dot.test" ] || exit 2
+printf 'ms\t17\n'
+for item in "$@"; do
+    p="${item%%:*}"; dom="${item#*:}"
+    if [ "$srv" = "spoof.dot.test" ] && [ "$p" = "target" ]; then
+        printf 'obs\t%s\t%s\taddresses\t203.0.113.200\n' "$p" "$dom"
+    elif [ "$p" = "target" ]; then
+        case "$dom" in
+            rutor.info) ip=198.51.100.11 ;;
+            flibusta.is) ip=198.51.100.12 ;;
+            rezka.ag) ip=198.51.100.13 ;;
+            *) ip=198.51.100.14 ;;
+        esac
+        printf 'obs\t%s\t%s\taddresses\t%s\n' "$p" "$dom" "$ip"
+    elif [ "$p" = "proxy" ]; then
+        case "$dom" in
+            api.github.com) printf 'obs\tproxy\t%s\taddresses\t140.82.121.6\n' "$dom" ;;
+            *) printf 'obs\tproxy\t%s\taddresses\t162.159.128.61\n' "$dom" ;;
+        esac
+    else
+        printf 'obs\t%s\t%s\taddresses\t93.184.216.34\n' "$p" "$dom"
+    fi
+done
+EOF
+chmod +x "$SB/fake-z2k-detect"
+(
+    Z2K_DNS_LIB=1 . "$S"
+    Z2K_DETECT_BIN="$SB/fake-z2k-detect"
+    Z2K_DNS_JOBS=4
+    OUT="$SB/dot_full.json"
+    printf 'dot:spoof.dot.test\ndot:noroot.dot.test\n' > "$SB/own_dot.txt"
+    OWN_LIST="$SB/own_dot.txt"
+    DEFAULT_SERVERS="Cloudflare|1.1.1.1|https://cloudflare-dns.com/dns-query|one.one.one.one
+Google|8.8.8.8|https://dns.google/dns-query|dns.google"
+    current_resolver() { printf ''; }
+    dot_alive() { return 1; }
+    _ans_ip() {
+        case "$1" in
+            rutor.info) printf '198.51.100.11\n' ;;
+            flibusta.is) printf '198.51.100.12\n' ;;
+            rezka.ag) printf '198.51.100.13\n' ;;
+            shikimori.one) printf '198.51.100.14\n' ;;
+            api.github.com) printf '140.82.121.6\n' ;;
+            www.notion.so) printf '162.159.128.61\n' ;;
+            *) printf '93.184.216.34\n' ;;
+        esac
+    }
+    udp_a() {
+        [ "$1" != "$CANARY" ] || return 1
+        [ "$1" != "1.1.1.1" ] || usleep 40000 2>/dev/null || :
+        _ans_ip "$2"
+    }
+    doh_wire_a() { _ans_ip "$2"; }
+    udp_ms() { printf 11; }
+    doh_wire_ms() { printf 22; }
+    main >"$SB/dot_full.stdout" 2>"$SB/dot_full.log"
+)
+python3 - "$SB/dot_full.json" <<'PYDOTFULL'
+import json, sys
+from pathlib import Path
+d = json.loads(Path(sys.argv[1]).read_text())
+names = [s['name'] for s in d['servers']]
+assert names == ['Cloudflare', 'Google', 'spoof.dot.test', 'noroot.dot.test'], names
+s0 = d['servers'][0]
+assert s0['udp'] == 'works' and s0['doh'] == 'works' and s0['dot'] == 'works' and s0['dot_ms'] == 17, s0
+assert s0['addr_udp'] == '1.1.1.1' and s0['addr_doh'].startswith('https://') and s0['addr_dot'] == 'one.one.one.one', s0
+s2 = d['servers'][2]
+assert s2['dot'] == 'spoof' and s2['verdict'] == 'spoof', s2
+s3 = d['servers'][3]
+assert s3['dot'] == 'unverified' and s3['verdict'] == 'unknown', s3
+PYDOTFULL
+assert_eq "полный DoT (works/spoof/unverified), реквизиты addr_* и порядок при параллельном опросе" 0 "$?"
+
+# ----------------------------------------------------------------------------
+# Набор 10. Подменю [D] Диагностика в lib/menu.sh (Enter -> z2k-diag, 2 -> DNS)
+# ----------------------------------------------------------------------------
+_mdir="$SB/menu_dir"
+mkdir -p "$_mdir"
+printf '#!/bin/sh\necho "DIAG_RAN"\n' > "$_mdir/z2k-diag.sh"
+printf '#!/bin/sh\necho "{\"ok\":1}"\necho "DNS_SUMMARY_ERR" >&2\n' > "$_mdir/z2k-dns-check.sh"
+chmod +x "$_mdir/z2k-diag.sh" "$_mdir/z2k-dns-check.sh"
+_m1=$(
+    . "$ROOT/lib/utils.sh"
+    . "$ROOT/lib/menu.sh"
+    ZAPRET2_DIR="$_mdir"
+    clear_screen() { :; }; pause() { :; }
+    read_input() { eval "$1=\"\""; }
+    menu_diag 2>&1
+)
+_m2=$(
+    . "$ROOT/lib/utils.sh"
+    . "$ROOT/lib/menu.sh"
+    ZAPRET2_DIR="$_mdir"
+    clear_screen() { :; }; pause() { :; }
+    read_input() { eval "$1=2"; }
+    menu_diag 2>&1
+)
+case "$_m1" in *DIAG_RAN*) _m1_ok=1 ;; *) _m1_ok=0 ;; esac
+case "$_m2" in *DNS_SUMMARY_ERR*) _m2_ok=1 ;; *) _m2_ok=0 ;; esac
+case "$_m2" in *'{"ok":1}'*) _m2_json=1 ;; *) _m2_json=0 ;; esac
+assert_eq "menu_diag по Enter запускает z2k-diag.sh" 1 "$_m1_ok"
+assert_eq "menu_diag по 2 запускает z2k-dns-check.sh и скрывает сырой JSON" "1:0" "$_m2_ok:$_m2_json"
+
+rm -rf "$_ow"
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
+

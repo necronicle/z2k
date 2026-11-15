@@ -58,9 +58,24 @@ udp_a() {
     printf '%s\n' "$_ua" | awk '
         /^Name:/ { inans = 1; next }
         inans && /^Address/ {
-            ip = $3
+            ip = ($1 == "Address:" ? $2 : $3)
             if (ip ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) print ip
         }'
+}
+
+_find_detect() {
+    if [ -n "${Z2K_DETECT_BIN:-}" ] && [ -x "${Z2K_DETECT_BIN}" ]; then
+        printf '%s' "$Z2K_DETECT_BIN"
+        return 0
+    fi
+    [ "${Z2K_DNS_LIB:-}" != 1 ] || return 1
+    for _dd in /opt/sbin /opt/bin "${ZAPRET2_DIR:-/opt/zapret2}"; do
+        if [ -x "$_dd/z2k-detect" ]; then
+            printf '%s' "$_dd/z2k-detect"
+            return 0
+        fi
+    done
+    return 1
 }
 
 # udp_ms СЕРВЕР — задержка обычного UDP-запроса в миллисекундах, или пусто.
@@ -93,13 +108,10 @@ udp_ms() {
     # z2k-detect уже лежит на каждом роутере (его возит проба блока по объёму),
     # и подкоманда dnsms меряет ровно обмен. Замер на роутере владельца: 26 мс
     # против 28 у dig на том же сервере.
-    for _dd in /opt/sbin /opt/bin "${ZAPRET2_DIR:-/opt/zapret2}"; do
-        if [ -x "$_dd/z2k-detect" ]; then
-            "$_dd/z2k-detect" dnsms -server "$1" -name "$2" \
-                -timeout "${TIMEOUT}s" 2>/dev/null | head -1
-            return 0
-        fi
-    done
+    if _dbin=$(_find_detect); then
+        "$_dbin" dnsms -server "$1" -name "$2" \
+            -timeout "${TIMEOUT}s" 2>/dev/null | head -1
+    fi
     return 0
 }
 
@@ -122,18 +134,31 @@ _wire_query() {
 _resolve_set() {   # _resolve_set URL IP -> _RIP пуст, если адреса нет
     _RIP=""; _RH=""; _RP=443
     [ -n "${2:-}" ] || return 0
-    case "$2" in *[!0-9.]*) return 0 ;; esac
+    case "$2" in
+        *[!0-9.]*)
+            case "$2" in
+                *:*)
+                    case "$2" in *[!0-9A-Fa-f:.]*) return 0 ;; esac
+                    _RIP="[$2]" ;;
+                *) return 0 ;;
+            esac ;;
+        *.*.*.*) _RIP="$2" ;;
+        *) return 0 ;;
+    esac
     _RH=${1#*://}; _RH=${_RH%%/*}
-    case "$_RH" in *:*) _RP=${_RH##*:}; _RH=${_RH%%:*} ;; esac
-    _RIP="$2"
+    case "$_RH" in
+        \[*\]:*) _RP=${_RH##*\]:}; _RH="${_RH%\]:*}]" ;;
+        \[*\]) ;;
+        *:*) _RP=${_RH##*:}; _RH=${_RH%%:*} ;;
+    esac
 }
 
 doh_wire_a() {
     _wq=$(_wire_query "$2" | base64 2>/dev/null | tr -d '=\n' | tr '+/' '-_')
     [ -n "$_wq" ] || return 1
-    _wf="/tmp/.z2k-dns-wa.$$"
+    _wf="${_WDIR:-/tmp}/.z2k-dns-wa.$$"
     _resolve_set "$1" "${3:-}"
-    _wc=$(curl -q -s -o "$_wf" --max-time "$TIMEOUT" -w '%{http_code}' ${_RIP:+--resolve} ${_RIP:+"$_RH:$_RP:$_RIP"} \
+    _wc=$(curl -q -g -s -o "$_wf" --max-time "$TIMEOUT" -w '%{http_code}' ${_RIP:+--resolve} ${_RIP:+"$_RH:$_RP:$_RIP"} \
           -H 'accept: application/dns-message' "$1?dns=$_wq" 2>/dev/null) || { rm -f "$_wf"; return 1; }
     [ "$_wc" = "200" ] || { rm -f "$_wf"; return 1; }
     dns_file_a "$_wf"
@@ -181,9 +206,9 @@ doh_wire_ms() {
     _wq=$(printf '\253\315\001\000\000\001\000\000\000\000\000\000\007example\003com\000\000\001\000\001' \
           | base64 2>/dev/null | tr -d '=\n' | tr '+/' '-_')
     [ -n "$_wq" ] || return 1
-    _wf="/tmp/.z2k-dns-wire.$$"
+    _wf="${_WDIR:-/tmp}/.z2k-dns-wire.$$"
     _resolve_set "$1" "${2:-}"
-    _wt=$(curl -q -s -o "$_wf" --max-time "$TIMEOUT" -w '%{time_total} %{http_code}' ${_RIP:+--resolve} ${_RIP:+"$_RH:$_RP:$_RIP"} \
+    _wt=$(curl -q -g -s -o "$_wf" --max-time "$TIMEOUT" -w '%{time_total} %{http_code}' ${_RIP:+--resolve} ${_RIP:+"$_RH:$_RP:$_RIP"} \
           -H 'accept: application/dns-message' "$1?dns=$_wq" 2>/dev/null) || { rm -f "$_wf"; return 1; }
     case "$_wt" in
         *" 200") ;;
@@ -195,26 +220,42 @@ doh_wire_ms() {
     printf '%s' "${_wt%% *}" | awk '{printf "%d", $1 * 1000}'
 }
 
-# DoT (RFC 7858): DNS-фрейм с двухбайтовой длиной внутри проверенного TLS.
-# Ожидание ограничено вручную: timeout и дробного sleep у BusyBox может не быть.
-# usleep даёт шаг 10 мс; без него время не публикуем.
+# DoT (RFC 7858): резервная проверка одного контрольного запроса через openssl,
+# когда z2k-detect недоступен или в системе нет корневых сертификатов для него.
 dot_alive() {
     DOT_ADDRESSES=""
     command -v openssl >/dev/null 2>&1 || return 2
     _dh=$(openssl s_client -help 2>&1)
     _nameflag=-verify_hostname; _sni="$1"
     case "$1" in
-        *[!0-9.]*|'') ;;
+        '') return 2 ;;
+        *[!0-9.]*)
+            case "$1" in
+                *:*)
+                    case "$1" in *[!0-9A-Fa-f:.]*) ;; *) _nameflag=-verify_ip; _sni="" ;; esac ;;
+            esac ;;
         *) _nameflag=-verify_ip; _sni="" ;;
     esac
     for _flag in -verify_return_error "$_nameflag" -servername; do
         case "$_dh" in *"$_flag"*) ;; *) return 2 ;; esac
     done
-    _df="/tmp/.z2k-dns-dot.$$"
+    _ieof=""
+    case "$_dh" in *-ign_eof*) _ieof=-ign_eof ;; esac
+    _cafile=""
+    case "$_dh" in
+        *-CAfile*)
+            for _cand in "${Z2K_DNS_CAFILE:-}" /opt/etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt; do
+                if [ -n "$_cand" ] && [ -s "$_cand" ]; then _cafile="$_cand"; break; fi
+            done ;;
+    esac
+    _conn="${2:-$1}"
+    case "$_conn" in *:*) _conn="[$_conn]:853" ;; *) _conn="$_conn:853" ;; esac
+    _df="${_WDIR:-/tmp}/.z2k-dns-dot.$$"
     rm -f "$_df"
     printf '\000\035\253\315\001\000\000\001\000\000\000\000\000\000\007example\003com\000\000\001\000\001' \
-        | openssl s_client -quiet -verify_return_error "$_nameflag" "$1" \
-            -connect "${2:-$1}:853" ${_sni:+-servername} ${_sni:+"$_sni"} >"$_df" 2>/dev/null &
+        | openssl s_client -quiet ${_ieof:+"$_ieof"} ${_cafile:+-CAfile} ${_cafile:+"$_cafile"} \
+            -verify_return_error "$_nameflag" "$1" \
+            -connect "$_conn" ${_sni:+-servername} ${_sni:+"$_sni"} >"$_df" 2>/dev/null &
     _dpid=$!
     _fine=1
     command -v usleep >/dev/null 2>&1 || _fine=0
@@ -247,7 +288,35 @@ dot_alive() {
     [ "$_complete" = 1 ] && [ "$_dr" = 0 ] && [ -n "$_da" ]
 }
 
-json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+# Полный конвейерный опрос DoT по порту 853 через z2k-detect dnsdot: проверяет
+# сертификат и опрашивает контроль, целевые, прокси-домены и youtube.com за
+# одно TLS-соединение.
+dot_batch() {
+    DOT_MS=""; DOT_YT=""
+    _db_srv="$1"; _db_host="$2"; _db_addr="${3:-}"; _db_op="${4:-}"
+    _db_out="${_WDIR:-/tmp}/.z2k-dns-dotb.$$"
+    set -- "control:$CONTROL"
+    for _d in $TARGETS; do set -- "$@" "target:$_d"; done
+    for _d in $PROXY_TARGETS; do set -- "$@" "proxy:$_d"; done
+    set -- "$@" "youtube:$YT_DOMAIN"
+    "$_dot_bin" dnsdot -server "$_db_host" ${_db_addr:+-addr} ${_db_addr:+"$_db_addr"} -timeout "${TIMEOUT}s" \
+        ${Z2K_DNS_CAFILE:+-cafile} ${Z2K_DNS_CAFILE:+"$Z2K_DNS_CAFILE"} "$@" >"$_db_out" 2>/dev/null
+    _dbr=$?
+    if [ "$_dbr" != 0 ]; then
+        rm -f "$_db_out"
+        return "$_dbr"
+    fi
+    while IFS="$(printf '\t')" read -r _kind _p _dom _outc _addrs; do
+        case "$_kind" in
+            ms) DOT_MS="$_p" ;;
+            obs)
+                printf '%s\037t\037%s\037%s\037%s\037%s\037%s\n' "$_db_srv" "$_dom" "$_outc" "$_addrs" "$_db_op" "$_p" >> "$_ans"
+                [ "$_p" != youtube ] || DOT_YT="$_outc" ;;
+        esac
+    done < "$_db_out"
+    rm -f "$_db_out"
+    return 0
+}
 
 _say() {
     case "$1" in
@@ -265,7 +334,14 @@ _say() {
 }
 
 current_resolver() {
-    sed -n 's/^nameserver[[:space:]]*\([0-9.]*\).*/\1/p' /etc/resolv.conf 2>/dev/null | head -1
+    awk '/^[[:space:]]*nameserver[[:space:]]+/ {
+        ip = $2
+        sub(/%.*/, "", ip)
+        if (ip ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ || (ip ~ /:/ && ip ~ /^[0-9A-Fa-f:.]+$/)) {
+            print ip
+            exit
+        }
+    }' "${Z2K_DNS_RESOLV_CONF:-/etc/resolv.conf}" 2>/dev/null
 }
 
 # Запись: сервер, путь, домен, исход, множество A, оператор, назначение. Неизвестные
@@ -292,6 +368,9 @@ classify() {
         for(i=1;i<=n;i++) for(j=1;j<=m;j++) if(x[i]!="" && x[i]==y[j]) return 1
         return 0
     }
+    function s24_of(ip,   o) {
+        return split(ip,o,".")==4 ? o[1] "." o[2] "." o[3] : ""
+    }
     BEGIN {
         nproxy=split(proxy_targets,pt,/ +/)
         for(pi=1;pi<=nproxy;pi++) if(pt[pi]!="") proxy_domains[pt[pi]]=1
@@ -313,7 +392,11 @@ classify() {
             for(i=1;i<=n;i++) {
                 k=key SUBSEP ips[i]
                 if(!seen[k SUBSEP $3]++) hits[k]++
-                if($2=="d" && $6!="" && !votes[$3 SUBSEP ips[i] SUBSEP $6]++) agree[$3 SUBSEP ips[i]]++
+                if($2=="d" && $6!="") {
+                    if(!votes[$3 SUBSEP ips[i] SUBSEP $6]++) agree[$3 SUBSEP ips[i]]++
+                    s24=s24_of(ips[i])
+                    if(s24!="" && !svotes[$3 SUBSEP s24 SUBSEP $6]++) sagree[$3 SUBSEP s24]++
+                }
             }
         }
     }
@@ -337,15 +420,32 @@ classify() {
                 k=key SUBSEP d; cmp="unavailable"
                 if(state[k]=="addresses") {
                     other=name SUBSEP "d" SUBSEP d
-                    if(path=="u" && ((name SUBSEP "d") in paths)) {
+                    if((path=="u" || path=="t") && ((name SUBSEP "d") in paths)) {
                         if(state[other]=="addresses") {
-                            cmp=overlap(addr[k],addr[other])?"overlap":"different"
+                            if(overlap(addr[k],addr[other])) cmp="overlap"
+                            else if(path=="t" && !stub[key]) {
+                                n=split(addr[k],ips,","); m24=0
+                                for(i=1;i<=n;i++) {
+                                    s24=s24_of(ips[i])
+                                    if(s24!="" && sagree[d SUBSEP s24]>=2) m24=1
+                                }
+                                cmp=m24?"overlap":"different"
+                            } else cmp="different"
                             if(cmp=="different") diff++
                         } else missing++
-                    } else if(path=="u") {
+                    } else if(path=="u" || path=="t") {
                         n=split(addr[k],ips,","); matched=0; reference=0
                         for(v in agree) {split(v,a,SUBSEP); if(a[1]==d && agree[v]>=2) reference=1}
-                        for(i=1;i<=n;i++) if(agree[d SUBSEP ips[i]]>=2) matched=1
+                        if(!reference) {
+                            for(v in sagree) {split(v,a,SUBSEP); if(a[1]==d && sagree[v]>=2) reference=1}
+                        }
+                        for(i=1;i<=n;i++) {
+                            if(agree[d SUBSEP ips[i]]>=2) matched=1
+                            else if(!stub[key]) {
+                                s24=s24_of(ips[i])
+                                if(s24!="" && sagree[d SUBSEP s24]>=2) matched=1
+                            }
+                        }
                         if(matched) cmp="consensus"
                         else if(reference) {cmp="different"; diff++}
                         else missing++
@@ -388,14 +488,92 @@ classify() {
     }' "$_ans" > "$_classified"
 }
 
+_probe_one() {
+    _WDIR="$1"; name="$2"; udp="$3"; doh="$4"; dot="$5"
+    _ans="$_WDIR/ans"; : > "$_ans"
+    _op=""
+    # Только встроенные записи имеют известную независимость операторов.
+    if printf '%s\n' "$DEFAULT_SERVERS" | grep -F -x -q "$name|$udp|$doh|$dot"; then _op="$name"; fi
+    _sip=""
+    case "$udp" in
+        ''|*[!0-9A-Fa-f:.]*) ;;
+        *.*.*.*|*:*) _sip="$udp" ;;
+    esac
+    ums=""; dms=""; tms=""; st_t=none; st_yt=none; DOT_YT=""
+    for d in $TARGETS; do
+        [ -z "$udp" ] || observe "$name" u "$udp" "$d" "" "$_op"
+        [ -z "$doh" ] || observe "$name" d "$doh" "$d" "$_sip" "$_op"
+    done
+    for d in $PROXY_TARGETS; do
+        [ -z "$udp" ] || observe "$name" u "$udp" "$d" "" "$_op" proxy
+        [ -z "$doh" ] || observe "$name" d "$doh" "$d" "$_sip" "$_op" proxy
+    done
+    if [ -n "$udp" ]; then
+        observe "$name" u "$udp" "$CONTROL" "" "$_op" control
+        [ "$_os" != addresses ] || ums=$(udp_ms "$udp" "$CONTROL")
+    fi
+    if [ -n "$doh" ]; then
+        observe "$name" d "$doh" "$CONTROL" "$_sip" "$_op" control
+        [ "$_os" != addresses ] || dms=$(doh_wire_ms "$doh" "$_sip") || dms=""
+    fi
+    if [ -n "$dot" ]; then
+        DOT_MS=""; DOT_ADDRESSES=""; _tr=0
+        if [ -n "${_dot_bin:-}" ]; then
+            dot_batch "$name" "$dot" "$_sip" "$_op" || _tr=$?
+            if [ "$_tr" = 0 ]; then
+                st_t=classified; tms="$DOT_MS"
+            elif [ "$_tr" = 2 ]; then
+                st_t=unverified
+                printf '%s\037t\037%s\037unverified\037\037%s\037control\n' "$name" "$CONTROL" "$_op" >> "$_ans"
+            else
+                st_t=silent
+                printf '%s\037t\037%s\037error\037\037%s\037control\n' "$name" "$CONTROL" "$_op" >> "$_ans"
+            fi
+        else
+            dot_alive "$dot" "$_sip" || _tr=$?
+            case "$_tr" in
+                0) st_t=limited; tms="$DOT_MS"; _to=addresses ;;
+                2) st_t=unverified; _to=unverified ;;
+                3) st_t=unknown; _to=no_a ;;
+                *) st_t=silent; _to=error ;;
+            esac
+            printf '%s\037t\037%s\037%s\037%s\037%s\037control\n' "$name" "$CONTROL" "$_to" "$DOT_ADDRESSES" "$_op" >> "$_ans"
+        fi
+    fi
+    # Ошибка транспорта не означает, что сервис отказал в A-записи.
+    if [ -n "$doh" ]; then
+        observe "$name" d "$doh" "$YT_DOMAIN" "$_sip" "$_op" youtube
+    else _os=error; fi
+    if [ "$_os" = error ] && [ -n "$udp" ]; then
+        observe "$name" u "$udp" "$YT_DOMAIN" "" "$_op" youtube
+    fi
+    if [ "$_os" = error ] && [ -n "$DOT_YT" ]; then
+        _os="$DOT_YT"
+    fi
+    case "$_os" in addresses) st_yt=ok ;; no_a) st_yt=empty ;; esac
+    printf '%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\n' \
+        "$name" "$ums" "$dms" "$st_t" "$tms" "$st_yt" "$udp" "$doh" "$dot" > "$_WDIR/row"
+    _dot_log="$st_t"
+    [ "$_dot_log" != classified ] || _dot_log=works
+    printf '  %-32s опрошен: обычный %s, DoH %s, DoT %s\n' "$name" \
+        "$([ -z "$udp" ] && printf '—' || { [ -n "$ums" ] && printf '%s мс' "$ums" || printf 'опрошен'; })" \
+        "$([ -z "$doh" ] && printf '—' || { [ -n "$dms" ] && printf '%s мс' "$dms" || printf 'опрошен'; })" \
+        "$([ -z "$dot" ] && printf 'не проверялся' || { [ "$st_t" = classified ] && [ -n "$tms" ] && printf '%s мс' "$tms" || _say "$_dot_log"; })" > "$_WDIR/log"
+}
+
 main() {
     _work=$(mktemp -d /tmp/.z2k-dns.XXXXXX) || return 1
-    _ans="$_work/answers"; _classified="$_work/classified"; _rows="$_work/rows"
-    : > "$_ans"; : > "$_rows"
+    _WDIR="$_work"
+    _ans="$_work/answers"; _classified="$_work/classified"; _rows="$_work/rows"; _sumlog="$_work/summary"
+    : > "$_ans"; : > "$_rows"; : > "$_sumlog"
     _tmp="${OUT}.new.$$"
     trap 'rm -rf "$_work"; rm -f "$_tmp" /tmp/.z2k-dns-wa.$$ /tmp/.z2k-dns-wire.$$ /tmp/.z2k-dns-dot.$$ /tmp/.z2k-dns-dot.$$.dns' EXIT
     trap 'exit 1' INT TERM
     printf 'Проверяю DNS тремя путями: UDP, DoH внутри HTTPS, DoT внутри TLS.\n' >&2
+    _dot_bin=""
+    if _dbin=$(_find_detect); then
+        case "$("$_dbin" -h 2>&1)" in *dnsdot*) _dot_bin="$_dbin" ;; esac
+    fi
     intercept=0; intercept_by=""
     observe "$CANARY" u "$CANARY" "$CONTROL" "" "" canary
     if [ "$_os" = addresses ]; then intercept=1; intercept_by="path"; fi
@@ -419,112 +597,162 @@ $line|$line||" ;;
     _cur=$(current_resolver); CURRENT_ADDR=""
     if [ -n "$_cur" ]; then
         case "$_cur" in
-            127.*) CURRENT_ADDR="Резолвер роутера ($_cur)" ;;
+            127.*|::1) CURRENT_ADDR="Резолвер роутера ($_cur)" ;;
             *) CURRENT_ADDR="Ваш DNS ($_cur)" ;;
         esac
         servers="$servers
 $CURRENT_ADDR|$_cur||"
     fi
-    printf '%s\n' "$servers" | while IFS='|' read -r name udp doh dot; do
+    _jobs="${Z2K_DNS_JOBS:-4}"
+    case "$_jobs" in ''|*[!0-9]*|0) _jobs=4 ;; esac
+    _idx=0; _running=0
+    while IFS='|' read -r name udp doh dot; do
         [ -n "$name" ] || continue
-        _op=""
-        # Только встроенные записи имеют известную независимость операторов.
-        if printf '%s\n' "$DEFAULT_SERVERS" | grep -F -x -q "$name|$udp|$doh|$dot"; then _op="$name"; fi
-        _sip=""; case "$udp" in ''|*[!0-9.]*) ;; *) _sip="$udp" ;; esac
-        ums=""; dms=""; tms=""; st_t=none; st_yt=none
-        for d in $TARGETS; do
-            [ -z "$udp" ] || observe "$name" u "$udp" "$d" "" "$_op"
-            [ -z "$doh" ] || observe "$name" d "$doh" "$d" "$_sip" "$_op"
-        done
-        for d in $PROXY_TARGETS; do
-            [ -z "$udp" ] || observe "$name" u "$udp" "$d" "" "$_op" proxy
-            [ -z "$doh" ] || observe "$name" d "$doh" "$d" "$_sip" "$_op" proxy
-        done
-        if [ -n "$udp" ]; then
-            observe "$name" u "$udp" "$CONTROL" "" "$_op" control
-            [ "$_os" != addresses ] || ums=$(udp_ms "$udp" "$CONTROL")
+        _idx=$((_idx + 1))
+        _sdir="$_work/srv.$_idx"
+        mkdir -p "$_sdir"
+        _probe_one "$_sdir" "$name" "$udp" "$doh" "$dot" &
+        _running=$((_running + 1))
+        if [ "$_running" -ge "$_jobs" ]; then
+            wait
+            _running=0
         fi
-        if [ -n "$doh" ]; then
-            observe "$name" d "$doh" "$CONTROL" "$_sip" "$_op" control
-            [ "$_os" != addresses ] || dms=$(doh_wire_ms "$doh" "$_sip") || dms=""
-        fi
-        if [ -n "$dot" ]; then
-            DOT_MS=""; DOT_ADDRESSES=""; _tr=0
-            dot_alive "$dot" "$_sip" || _tr=$?
-            case "$_tr" in
-                0) st_t=limited; tms="$DOT_MS"; _to=addresses ;;
-                2) st_t=unverified; _to=unverified ;;
-                3) st_t=unknown; _to=no_a ;;
-                *) st_t=silent; _to=error ;;
-            esac
-            printf '%s\037t\037example.com\037%s\037%s\037%s\037control\n' "$name" "$_to" "$DOT_ADDRESSES" "$_op" >> "$_ans"
-        fi
-        # Ошибка транспорта не означает, что сервис отказал в A-записи.
-        if [ -n "$doh" ]; then
-            observe "$name" d "$doh" "$YT_DOMAIN" "$_sip" "$_op" youtube
-        else _os=error; fi
-        if [ "$_os" = error ] && [ -n "$udp" ]; then
-            observe "$name" u "$udp" "$YT_DOMAIN" "" "$_op" youtube
-        fi
-        case "$_os" in addresses) st_yt=ok ;; no_a) st_yt=empty ;; esac
-        printf '%s\037%s\037%s\037%s\037%s\037%s\n' "$name" "$ums" "$dms" "$st_t" "$tms" "$st_yt" >> "$_rows"
-        printf '  %-32s опрошен: обычный %s, DoH %s, DoT %s\n' "$name" \
-            "$([ -z "$udp" ] && printf '—' || { [ -n "$ums" ] && printf '%s мс' "$ums" || printf 'опрошен'; })" \
-            "$([ -z "$doh" ] && printf '—' || { [ -n "$dms" ] && printf '%s мс' "$dms" || printf 'опрошен'; })" \
-            "$(_say "$st_t")" >&2
+    done <<EOF
+$servers
+EOF
+    wait
+    _i=1
+    while [ "$_i" -le "$_idx" ]; do
+        _sdir="$_work/srv.$_i"
+        [ -f "$_sdir/ans" ] && cat "$_sdir/ans" >> "$_ans"
+        [ -f "$_sdir/row" ] && cat "$_sdir/row" >> "$_rows"
+        [ -f "$_sdir/log" ] && cat "$_sdir/log" >&2
+        _i=$((_i + 1))
     done
     printf '\nСверка ответов между серверами — итог:\n' >&2
     classify
     onpath=$(awk -F'\037' '$1=="meta" {print $2}' "$_classified")
     if [ -n "$onpath" ]; then intercept=1; intercept_by=path; fi
-    {
-        printf '{"ts":%s,"intercept":%s,"intercept_by":"%s","stub":"%s","servers":[' "$(date +%s)" "$intercept" "$intercept_by" "$onpath"
-        first=1
-        while IFS="$(printf '\037')" read -r name ums dms st_t tms st_yt; do
-            st_u=none; st_d=none; n_ok=0; n_all=0; stub_hits=0
-            _states=$(awk -F'\037' -v n="$name" '$1=="state" && $2==n {print $3 "|" $4 "|" $5 "|" $6 "|" $7}' "$_classified")
-            while IFS='|' read -r path st count total stub; do
-                case "$path" in
-                    u) st_u="$st"; n_ok="$count"; n_all="$total" ;;
-                    d) st_d="$st" ;;
-                esac
-                stub_hits=$((stub_hits + ${stub:-0}))
-            done <<EOF
-$_states
-EOF
-            verdict=silent
-            for st in "$st_u" "$st_d" "$st_t"; do
-                case "$st" in unknown|unverified|limited) verdict=unknown ;; esac
-            done
-            for severity in mismatch hijack spoof; do
-                for st in "$st_u" "$st_d"; do
-                    [ "$st" != proxy ] || st=spoof
-                    [ "$st" != "$severity" ] || verdict="$severity"
-                done
-            done
-            if [ "$st_u" = works ] || [ "$st_d" = works ]; then verdict=works; fi
-            _yt=""; [ "$st_yt" != empty ] || _yt=", youtube.com: адреса нет"
-            printf '  %s: UDP %s; DoH %s; DoT %s%s\n' "$name" "$(_say "$st_u")" "$(_say "$st_d")" "$(_say "$st_t")" "$_yt" >&2
-            [ "$first" = 1 ] || printf ','; first=0
-            _is_cur=0; [ "$name" != "$CURRENT_ADDR" ] || _is_cur=1
-            case "$ums" in ''|*[!0-9]*) ums=null ;; esac
-            case "$dms" in ''|*[!0-9]*) dms=null ;; esac
-            case "$tms" in ''|*[!0-9]*) tms=null ;; esac
-            printf '{"name":"%s","udp":"%s","udp_ms":%s,"doh":"%s","doh_ms":%s,"dot":"%s","dot_ms":%s,"yt":"%s","ok":%s,"total":%s,"stub":%s,"current":%s,"verdict":"%s"}' \
-                "$(json_escape "$name")" "$st_u" "$ums" "$st_d" "$dms" "$st_t" "$tms" "$st_yt" "$n_ok" "$n_all" "$stub_hits" "$_is_cur" "$verdict"
-        done < "$_rows"
-        printf '],"observations":['
-        first=1
-        while IFS="$(printf '\037')" read -r name path domain outcome addresses operator purpose; do
-            [ "$first" = 1 ] || printf ','; first=0
-            comparison=$(awk -F'\037' -v n="$name" -v p="$path" -v d="$domain" '$1=="comparison" && $2==n && $3==p && $4==d {print $5}' "$_classified")
-            [ "$purpose" = target ] || comparison="$purpose"
-            printf '{"server":"%s","operator":"%s","path":"%s","domain":"%s","outcome":"%s","purpose":"%s","addresses":[' "$(json_escape "$name")" "$(json_escape "$operator")" "$path" "$domain" "$outcome" "$purpose"
-            printf '%s' "$addresses" | awk -F, '{for(i=1;i<=NF;i++) {if(i>1)printf ","; printf "\"%s\"",$i}}'
-            printf '],"comparison":"%s"}' "$comparison"
-        done < "$_ans"
-        printf ']}\n'
-    } > "$_tmp"
+    awk -F'\037' \
+        -v ts="$(date +%s)" \
+        -v intercept="$intercept" \
+        -v intercept_by="$intercept_by" \
+        -v onpath="$onpath" \
+        -v cur="$CURRENT_ADDR" \
+        -v f_cls="$_classified" \
+        -v f_rows="$_rows" \
+        -v f_ans="$_ans" \
+        -v sumlog="$_sumlog" '
+    function jesc(s,   i, c, r) {
+        r = ""
+        for (i = 1; i <= length(s); i++) {
+            c = substr(s, i, 1)
+            if (c == "\\" || c == "\"") r = r "\\" c
+            else r = r c
+        }
+        return r
+    }
+    function jms(s) {
+        return (s != "" && s ~ /^[0-9]+$/) ? s : "null"
+    }
+    function say(st) {
+        if (st == "works") return "признаков подмены нет"
+        if (st == "proxy") return "свой прокси вместо сайта"
+        if (st == "spoof") return "ответ подменён (заглушка)"
+        if (st == "hijack") return "перехвачено на пути"
+        if (st == "mismatch") return "ответы расходятся"
+        if (st == "unknown") return "недостаточно данных"
+        if (st == "unverified") return "TLS не проверен"
+        if (st == "limited") return "TLS проверен, только контрольный запрос"
+        if (st == "silent") return "нет ответа или ошибка транспорта"
+        return "не проверялся"
+    }
+    function eff_sev(st) {
+        return st == "proxy" ? "spoof" : st
+    }
+    FILENAME == f_cls {
+        if ($1 == "state") {
+            k = $2 SUBSEP $3
+            c_st[k] = $4
+            c_ok[k] = $5 + 0
+            c_tot[k] = $6 + 0
+            c_stub[k] = $7 + 0
+        } else if ($1 == "comparison") {
+            c_cmp[$2 SUBSEP $3 SUBSEP $4] = $5
+        }
+        next
+    }
+    FILENAME == f_rows {
+        r_n++
+        r_name[r_n] = $1; r_ums[r_n] = $2; r_dms[r_n] = $3
+        r_stt[r_n] = $4;  r_tms[r_n] = $5; r_yt[r_n] = $6
+        r_au[r_n] = $7;   r_ad[r_n] = $8;  r_at[r_n] = $9
+        next
+    }
+    FILENAME == f_ans {
+        o_n++
+        o_srv[o_n] = $1; o_path[o_n] = $2; o_dom[o_n] = $3
+        o_out[o_n] = $4; o_addr[o_n] = $5; o_op[o_n] = $6; o_purp[o_n] = $7
+        next
+    }
+    END {
+        printf "{\"ts\":%s,\"intercept\":%s,\"intercept_by\":\"%s\",\"stub\":\"%s\",\"servers\":[", \
+            ts, intercept, jesc(intercept_by), jesc(onpath)
+        for (i = 1; i <= r_n; i++) {
+            name = r_name[i]
+            ku = name SUBSEP "u"; kd = name SUBSEP "d"; kt = name SUBSEP "t"
+            st_u = (ku in c_st) ? c_st[ku] : "none"
+            st_d = (kd in c_st) ? c_st[kd] : "none"
+            st_t = r_stt[i]
+            if (st_t == "classified") st_t = (kt in c_st) ? c_st[kt] : "silent"
+
+            n_ok = 0; n_all = 0
+            if (ku in c_st) { n_ok = c_ok[ku]; n_all = c_tot[ku] }
+            else if (kd in c_st) { n_ok = c_ok[kd]; n_all = c_tot[kd] }
+            else if (kt in c_st) { n_ok = c_ok[kt]; n_all = c_tot[kt] }
+            stub_hits = ((ku in c_stub) ? c_stub[ku] : 0) + ((kd in c_stub) ? c_stub[kd] : 0) + ((kt in c_stub) ? c_stub[kt] : 0)
+
+            verdict = "silent"
+            if (st_u ~ /^(unknown|unverified|limited)$/ || st_d ~ /^(unknown|unverified|limited)$/ || st_t ~ /^(unknown|unverified|limited)$/) {
+                verdict = "unknown"
+            }
+            split("mismatch hijack spoof", sevs, " ")
+            for (si = 1; si <= 3; si++) {
+                sv = sevs[si]
+                if (eff_sev(st_u) == sv || eff_sev(st_d) == sv || eff_sev(st_t) == sv) verdict = sv
+            }
+            if (st_u == "works" || st_d == "works" || st_t == "works") verdict = "works"
+
+            yt_note = (r_yt[i] == "empty") ? ", youtube.com: адреса нет" : ""
+            printf "  %s: UDP %s; DoH %s; DoT %s%s\n", name, say(st_u), say(st_d), say(st_t), yt_note >> sumlog
+
+            if (i > 1) printf ","
+            is_cur = (name == cur && cur != "") ? 1 : 0
+            printf "{\"name\":\"%s\",\"udp\":\"%s\",\"udp_ms\":%s,\"doh\":\"%s\",\"doh_ms\":%s,\"dot\":\"%s\",\"dot_ms\":%s,\"yt\":\"%s\",\"ok\":%d,\"total\":%d,\"stub\":%d,\"current\":%d,\"verdict\":\"%s\",\"addr_udp\":\"%s\",\"addr_doh\":\"%s\",\"addr_dot\":\"%s\"}", \
+                jesc(name), st_u, jms(r_ums[i]), st_d, jms(r_dms[i]), st_t, jms(r_tms[i]), \
+                r_yt[i], n_ok, n_all, stub_hits, is_cur, verdict, \
+                jesc(r_au[i]), jesc(r_ad[i]), jesc(r_at[i])
+        }
+        printf "],\"observations\":["
+        for (j = 1; j <= o_n; j++) {
+            if (j > 1) printf ","
+            purp = o_purp[j]
+            cmp = (purp == "target") ? c_cmp[o_srv[j] SUBSEP o_path[j] SUBSEP o_dom[j]] : purp
+            printf "{\"server\":\"%s\",\"operator\":\"%s\",\"path\":\"%s\",\"domain\":\"%s\",\"outcome\":\"%s\",\"purpose\":\"%s\",\"addresses\":[", \
+                jesc(o_srv[j]), jesc(o_op[j]), o_path[j], jesc(o_dom[j]), o_out[j], purp
+            na = split(o_addr[j], arr, ",")
+            first_a = 1
+            for (ai = 1; ai <= na; ai++) {
+                if (arr[ai] == "") continue
+                if (!first_a) printf ","
+                first_a = 0
+                printf "\"%s\"", jesc(arr[ai])
+            }
+            printf "],\"comparison\":\"%s\"}", jesc(cmp)
+        }
+        printf "]}\n"
+    }' "$_classified" "$_rows" "$_ans" > "$_tmp"
+    cat "$_sumlog" >&2
     mv -f "$_tmp" "$OUT"
     printf '\nГотово.\n' >&2
     cat "$OUT"
