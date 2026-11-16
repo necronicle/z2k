@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 186,
-  "current": "p-88.4",
+  "seq": 187,
+  "current": "p-88.5",
   "install_map": {
   "common/ipt.sh": ["/opt/zapret2/common/ipt.sh"],
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
@@ -221,7 +221,7 @@
   "files/z2k-auto-update.sh": "0aa7dfb57e49869d1f4cd5fa40a40768bdb401b5adc32f5b81dba6061408d1d3",
   "files/z2k-blocked-monitor.sh": "441c5054e002c17aa7223a8694fa943a62579643a03d99b0870a94060e358a2f",
   "files/z2k-config-validator.sh": "bc087b0b22c0ce19413452cfe17f7fd6aafc1320374e0e4a547bdd1594c07dfe",
-  "files/z2k-diag.sh": "38b4a5b68bf884cce7e7d344aa957b45cf92e6b4b63fba97fd2b81f05316659e",
+  "files/z2k-diag.sh": "1e6e3eb0b454da3e6b0918a8d1b3f0132b05fb5aa7ff1b4ee4bc19965143f033",
   "files/z2k-dns-check.sh": "ab69177fe56a37ed0d91bdc95af3363a683d57f0cd93b964a4cf1fa574c1b0f7",
   "files/z2k-fix-tg-watchdog.sh": "95a063051c86b11fe96aa5b39349306500a54b1b25601b38184046cfedcd161e",
   "files/z2k-geosite.sh": "aa59a128572ce881959313ce08f015bb6f2699affdd2580f86cb3311e5c03774",
@@ -239,7 +239,7 @@
   "lib/auto_update.sh": "1f1f5581684d68490ce501c1b02341f3486b3931f3a62858aef3854dd85c22ed",
   "lib/config.sh": "48ce8a12848dc893ff8b102dc607f9079369b17132a440971dd29870ae852614",
   "lib/config_official.sh": "dbebdb4b1739df361ccdf21152b41e9cd4ad3d1ee7c8bb19a0a2841dd5f7f6ba",
-  "lib/install.sh": "f3eb7401c2d0b07b9fdf5443dd445fea7d8e832a6dfca75a42513ebb35c18440",
+  "lib/install.sh": "2bed5e22e9eba1c4797e4c61454a095b29f93d656c935c015dc045f5d121b625",
   "lib/menu.sh": "f7c13998b2c489817f0a8db4d4e6958e43ba8b118b89189c061ebbd7616558ba",
   "lib/strategies.sh": "87f1ced9815120a019ef1f7f9256e212ca8e32374ea213fd1fc839e3e51fa705",
   "lib/utils.sh": "a7fbfcfb5935f3571b1849e7a60c2dc5f65479fdc65e8208e98d18c6d6a8aff4",
@@ -265,7 +265,7 @@
   "mtproxy-client/builds/z2k-rt-proxy-linux-mipsle": "3a11e2e5fc374fcbb6e50e85b4d13ad88bfc3c891de47c8c6f5429231964ed19",
   "quic_strats.ini": "158a7824ce000424f515c45fb72d93dd06bcd69f90313c15493d557367dd8aad",
   "strats_new2.txt": "a2e16410c97e1f85f45d2fdc81f840cd3a6bc69043dadcb95e7ae7b428c0da2e",
-  "webpanel/cgi/actions.sh": "b99957df1244ad7a459114fd2182449bf1ad4ce8bd967a7db7cae82546f328dd",
+  "webpanel/cgi/actions.sh": "6679cfb0b9efe70c9a2d475047ba5cc67bbfc37f951d5205a580d4e92d7351e6",
   "webpanel/cgi/api.sh": "d205dd5a73014e3e873d2105ed40f515f77368e279d8ccdf3558db8f06f1aa20",
   "webpanel/cgi/auth.sh": "9cefb201ed8ffc5812a565d0f6c15ada404dba7e182bc7b61191423359af74c9",
   "webpanel/init.d/S96z2k-webpanel": "d0e5cdba270fb973c3fba396e548b657e406f2aa9f8c84cf0bef58385dcb3bb5",
@@ -284,7 +284,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "69d936cc4d6d24fc86192576eca499482967ea5fc0f8f07b0a7cd51b471f875f",
+  "webpanel/www/index.html": "1bc7e34b63384d21f9631b93c88f1a5cea7f70ce52ec8fdcc618b5f74110af6e",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -667,6 +667,7 @@
 {"v": "p-88.1", "type": "patch", "ts": "2026-11-13T22:46:26Z", "ref": "p-88.1", "desc": "Обновления приложений в Google Play снова скачиваются, а ролики YouTube реже зависают на старте: исправлены обрывы при первом соединении и ускорен обход блокировки по ответу сервера. Убрана подмена адреса видео — пользы она не давала.", "changed_files": ["webpanel/www/index.html", "files/000-zapret2.sh", "files/S99zapret2.new", "files/lua/z2k-alert.lua", "files/lua/z2k-preflight.lua", "files/lua/z2k-quic-silence.lua", "files/lua/z2k-state-persist.lua", "files/z2k-diag.sh", "lib/config.sh", "lib/config_official.sh", "lib/install.sh", "lib/menu.sh", "quic_strats.ini", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/credits.js", "webpanel/www/js/pages/policy.js", "webpanel/www/js/pages/strategies.js", "webpanel/www/js/pages/toggles.js", "z2k-detect/builds/z2k-detect-linux-386", "z2k-detect/builds/z2k-detect-linux-amd64", "z2k-detect/builds/z2k-detect-linux-arm", "z2k-detect/builds/z2k-detect-linux-arm64", "z2k-detect/builds/z2k-detect-linux-mips", "z2k-detect/builds/z2k-detect-linux-mips64le", "z2k-detect/builds/z2k-detect-linux-mipsle", "z2k-detect/builds/z2k-detect-linux-ppc64", "z2k-detect/builds/z2k-detect-linux-riscv64", "UPDATES.json"], "steps": ["regen-strategies", "regen-config", "validate-config", "refresh-binaries", "restart-service"], "full_install": false},
 {"v": "p-88.2", "type": "patch", "ts": "2026-11-14T20:46:32Z", "ref": "p-88.2", "desc": "WARP: исключения по доменам срабатывают сразу, в том числе на телефонах и компьютерах в сетях с IPv6, а открытые соединения больше не обрываются при смене маршрута. Если у провайдера есть IPv6, WARP теперь пропускает и его — сайты больше не открываются в обход WARP.", "changed_files": ["webpanel/www/index.html", "files/ndm/93-z2k-warp.sh", "files/z2k-warp-list-filter.awk", "files/z2k-warp.sh", "lib/install.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/warp.js", "z2k-warpd/builds/z2k-warpd-linux-amd64", "z2k-warpd/builds/z2k-warpd-linux-arm", "z2k-warpd/builds/z2k-warpd-linux-arm64", "z2k-warpd/builds/z2k-warpd-linux-mips", "z2k-warpd/builds/z2k-warpd-linux-mips64el", "z2k-warpd/builds/z2k-warpd-linux-mipsel", "z2k-warpd/builds/z2k-warpd-linux-mipsle", "z2k-warpd/builds/z2k-warpd-linux-ppc64", "z2k-warpd/builds/z2k-warpd-linux-riscv64", "z2k-warpd/builds/z2k-warpd-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-88.3", "type": "patch", "ts": "2026-11-14T22:14:46Z", "ref": "p-88.3", "desc": "Telegram снова работает через одно общее соединение, как до 10 ноября: вернули проверенную схему, с которой было меньше обрывов. Веб-версия WhatsApp снова открывается у тех, у кого не загружалась. В благодарностях появился новый спонсор — Den.", "changed_files": ["webpanel/www/index.html", "files/init.d/S98tg-tunnel", "files/ndm/90-z2k-tg-redirect.sh", "files/z2k-tg-redirect.sh", "files/z2k-tg-watchdog.sh", "lib/menu.sh", "mtproxy-client/builds/tg-mtproxy-client-linux-386", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64le", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsle", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
-{"v": "p-88.4", "type": "patch", "ts": "2026-11-16T12:33:47Z", "ref": "p-88.4", "desc": "Переключатели «YouTube без QUIC» и «Весь QUIC через TCP» теперь действительно ускоряют старт видео: роутер сразу отклоняет такое подключение, и браузер или приложение без ожидания переходит на обычное соединение. Раньше попытка просто терялась, и устройство ждало ответа.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lua/z2k-quic-reject.lua", "files/z2k-config-validator.sh", "lib/config_official.sh", "webpanel/www/js/pages/toggles.js", "z2k.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false}
+{"v": "p-88.4", "type": "patch", "ts": "2026-11-16T12:33:47Z", "ref": "p-88.4", "desc": "Переключатели «YouTube без QUIC» и «Весь QUIC через TCP» теперь действительно ускоряют старт видео: роутер сразу отклоняет такое подключение, и браузер или приложение без ожидания переходит на обычное соединение. Раньше попытка просто терялась, и устройство ждало ответа.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lua/z2k-quic-reject.lua", "files/z2k-config-validator.sh", "lib/config_official.sh", "webpanel/www/js/pages/toggles.js", "z2k.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false},
+{"v": "p-88.5", "type": "patch", "ts": "2026-11-16T16:32:19Z", "ref": "p-88.5", "desc": "Улучшена диагностика: отчёт включает дополнительные ошибки и точнее показывает настройки. Исправлена очистка после удаления, обновлена инструкция по установке и работе с веб-панелью.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "lib/install.sh", "webpanel/cgi/actions.sh", "UPDATES.json"], "steps": [], "full_install": false}
   ]
 }
