@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 185,
-  "current": "p-88.3",
+  "seq": 186,
+  "current": "p-88.4",
   "install_map": {
   "common/ipt.sh": ["/opt/zapret2/common/ipt.sh"],
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
@@ -59,6 +59,7 @@
   "files/lua/z2k-modern-core.lua": ["/opt/zapret2/lua/z2k-modern-core.lua"],
   "files/lua/z2k-nfqws1-compat.lua": ["/opt/zapret2/lua/z2k-nfqws1-compat.lua"],
   "files/lua/z2k-preflight.lua": ["/opt/zapret2/lua/z2k-preflight.lua"],
+  "files/lua/z2k-quic-reject.lua": ["/opt/zapret2/lua/z2k-quic-reject.lua"],
   "files/lua/z2k-quic-silence.lua": ["/opt/zapret2/lua/z2k-quic-silence.lua"],
   "files/lua/z2k-range-rand.lua": ["/opt/zapret2/lua/z2k-range-rand.lua"],
   "files/lua/z2k-state-persist.lua": ["/opt/zapret2/lua/z2k-state-persist.lua"],
@@ -150,7 +151,7 @@
   "files_sha256": {
   "common/ipt.sh": "0530b043dbb52e544715193e6cbad84e50155d5b1c451a5e26f0b2de7c3f2f62",
   "files/000-zapret2.sh": "8a09f2eae7b72844757a0bcac4c691738c75bea740baf0a5afea96288c6c99a8",
-  "files/S99zapret2.new": "ad56a69847bdb4eb215a2d71b56134c3024e5266966e8c6880f8b778aeaaa15c",
+  "files/S99zapret2.new": "e674c6a76ad74b9799cc3db4411f31762024a68465c69035c32894c0ac02b391",
   "files/etc/z2k-roots.pem": "73e33da886473f1cf2a347fc5be8688540861abd60ac6caa0da1b84242bcdd76",
   "files/etc/z2k-update-pub.pem": "1041720fa0dff53e2babbf547a705c2f43c30bca2c6ca2ddf7144cfe3b470a01",
   "files/fake/quic_1.bin": "f4589c57749f956bb30538197a521d7005f8b0a8723b4707e72405e51ddac50a",
@@ -203,6 +204,7 @@
   "files/lua/z2k-modern-core.lua": "7a9487cc4fbeb41e3b5300a15ea326267bdc314502a2d86f080b4722c3fcd3e5",
   "files/lua/z2k-nfqws1-compat.lua": "d3ee32db5bdfcee6ed5c054dc3f584cf097b2cf2b7eb0d52c0f0795c4ca3d9e5",
   "files/lua/z2k-preflight.lua": "1f2fcee1c903f8cf8981498f07414c309b4acbc72762275ecbdbe6f0b6db6b2f",
+  "files/lua/z2k-quic-reject.lua": "0234eef9ee050fe49802caefca89e94c6b0fdc0f8ca6a9523b8c1ae751b59131",
   "files/lua/z2k-quic-silence.lua": "182b5315636ee978016376d885f38aeaaeee8f0eebc5f8910d9a7bde4380ca95",
   "files/lua/z2k-range-rand.lua": "073c24d9133484b9f2282f1e398b5963eb577b483c1cab8c29cfd6e7bf8acd9a",
   "files/lua/z2k-state-persist.lua": "13bbb799d86a48854170612e90749b21006e985fc020d5c0d34e66b6cd87d185",
@@ -218,7 +220,7 @@
   "files/z2k-agh-sync.sh": "a7a998dcc9490c7f607ac04161ccefa0c5152beed07ecc0692371d21de68a3b8",
   "files/z2k-auto-update.sh": "0aa7dfb57e49869d1f4cd5fa40a40768bdb401b5adc32f5b81dba6061408d1d3",
   "files/z2k-blocked-monitor.sh": "441c5054e002c17aa7223a8694fa943a62579643a03d99b0870a94060e358a2f",
-  "files/z2k-config-validator.sh": "7be61c33c0b9bb03c1326e1a2553469fd59cfbcdd97ff6f7e3790beb6c43e4e5",
+  "files/z2k-config-validator.sh": "bc087b0b22c0ce19413452cfe17f7fd6aafc1320374e0e4a547bdd1594c07dfe",
   "files/z2k-diag.sh": "38b4a5b68bf884cce7e7d344aa957b45cf92e6b4b63fba97fd2b81f05316659e",
   "files/z2k-dns-check.sh": "ab69177fe56a37ed0d91bdc95af3363a683d57f0cd93b964a4cf1fa574c1b0f7",
   "files/z2k-fix-tg-watchdog.sh": "95a063051c86b11fe96aa5b39349306500a54b1b25601b38184046cfedcd161e",
@@ -236,7 +238,7 @@
   "files/z2k-warp.sh": "543cf65324279cac65a2cb62d2f62fe3283e3cf0570db6424025ddea220831d2",
   "lib/auto_update.sh": "1f1f5581684d68490ce501c1b02341f3486b3931f3a62858aef3854dd85c22ed",
   "lib/config.sh": "48ce8a12848dc893ff8b102dc607f9079369b17132a440971dd29870ae852614",
-  "lib/config_official.sh": "7b0a709ea195061e4f82541e74648b5137639be65c6b2217792a2f35354ae0ff",
+  "lib/config_official.sh": "dbebdb4b1739df361ccdf21152b41e9cd4ad3d1ee7c8bb19a0a2841dd5f7f6ba",
   "lib/install.sh": "f3eb7401c2d0b07b9fdf5443dd445fea7d8e832a6dfca75a42513ebb35c18440",
   "lib/menu.sh": "f7c13998b2c489817f0a8db4d4e6958e43ba8b118b89189c061ebbd7616558ba",
   "lib/strategies.sh": "87f1ced9815120a019ef1f7f9256e212ca8e32374ea213fd1fc839e3e51fa705",
@@ -282,7 +284,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "6f72ef10f011adcf416b9720eae4bab0ba00d09f043553f7b7523a5bb2a85137",
+  "webpanel/www/index.html": "69d936cc4d6d24fc86192576eca499482967ea5fc0f8f07b0a7cd51b471f875f",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -301,7 +303,7 @@
   "webpanel/www/js/pages/policy.js": "614c1c3bb254339077b37b67ae543d29ebb227ee3e581ae8786e507c1e9c505e",
   "webpanel/www/js/pages/strategies.js": "7589d43ee39114586aced5ca3c54c0a7a4376579ed3cb11110330d5785b28132",
   "webpanel/www/js/pages/strategy-pick.js": "ea84a2f9a20e743c2fddd4dcd8d66899f8675dcc7f56332f2709a09aa44c070e",
-  "webpanel/www/js/pages/toggles.js": "8fc8d2f901850ee3f6ea6f7bff966f943d9018a466987c4e18e5122a027cbda4",
+  "webpanel/www/js/pages/toggles.js": "83c7ce46e2a152a178181b99d12598c3d188ae6a8353fe74d4f91b54dbb61bb2",
   "webpanel/www/js/pages/update.js": "889eec2ea9cd54237ac4be9241877364b9ae2f225ddc512d6b632a749aee06bc",
   "webpanel/www/js/pages/warp.js": "410d2bd71b3594049b92d566532c938e9a59807887f6ccb611bb2accc4e44ca8",
   "webpanel/www/js/router.js": "865a158cff37e0fb2591f7d23f72a6c20be520d438dc8152abf294bf9d931a15",
@@ -326,7 +328,7 @@
   "z2k-warpd/builds/z2k-warpd-linux-ppc64": "f3a41d2d5c1973b2e6f0d8349dafcd2e88a6dfbb2c4309cf76d043f00f4d095c",
   "z2k-warpd/builds/z2k-warpd-linux-riscv64": "cf6d4fbda9ab0aefe47832969b7cb7b2b715665c24e40846b6349b2b320fe896",
   "z2k-warpd/builds/z2k-warpd-linux-x86": "ef7f592a8fa87fd7efde4ec9e95f7c964c21bfd6267955f2acb3af0aba922f86",
-  "z2k.sh": "49b5d20d9bd2fcfa6c7d4c921636b3c4c1e9f2daed5c7daae995edf35f52cd1f"
+  "z2k.sh": "2debe7b4c3ca3a6d08b6048285db89639c2dd7e35dd38d549c78cc9e2c850828"
   },
   "history": [
 {"v": "r-1", "type": "reinstall", "ts": "2026-05-04T00:00:00Z", "ref": "vk-whitelist-ext", "desc": "Extend whitelist with VK service/CDN domains (vkuseraudio/vkuservideo/vk-cdn/mvk/vkpay/vkforms/etc) — fixes broken photo comments and other XHR over non-vk.com VK domains", "changed_files": ["lib/config.sh"]},
@@ -664,6 +666,7 @@
 {"v": "p-87.37", "type": "patch", "ts": "2026-11-11T19:25:19Z", "ref": "p-87.37", "desc": "YouTube работает как утром 11 ноября: настройки видео возвращены к прежним. Остальные исправления последних версий — WhatsApp и Instagram с AdGuard Home, сохранение переключателей, Telegram — остаются.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lists/extra_strats/TCP/YT_GV/List.txt", "files/lua/z2k-state-persist.lua", "files/z2k-geosite.sh", "lib/config_official.sh", "mtproxy-client/builds/tg-mtproxy-client-linux-386", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64le", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsle", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "z2k-detect/builds/z2k-detect-linux-386", "z2k-detect/builds/z2k-detect-linux-amd64", "z2k-detect/builds/z2k-detect-linux-arm", "z2k-detect/builds/z2k-detect-linux-arm64", "z2k-detect/builds/z2k-detect-linux-mips", "z2k-detect/builds/z2k-detect-linux-mips64le", "z2k-detect/builds/z2k-detect-linux-mipsle", "z2k-detect/builds/z2k-detect-linux-ppc64", "z2k-detect/builds/z2k-detect-linux-riscv64", "UPDATES.json"], "steps": ["regen-config", "validate-config", "refresh-binaries", "restart-service"], "full_install": false},
 {"v": "p-88.1", "type": "patch", "ts": "2026-11-13T22:46:26Z", "ref": "p-88.1", "desc": "Обновления приложений в Google Play снова скачиваются, а ролики YouTube реже зависают на старте: исправлены обрывы при первом соединении и ускорен обход блокировки по ответу сервера. Убрана подмена адреса видео — пользы она не давала.", "changed_files": ["webpanel/www/index.html", "files/000-zapret2.sh", "files/S99zapret2.new", "files/lua/z2k-alert.lua", "files/lua/z2k-preflight.lua", "files/lua/z2k-quic-silence.lua", "files/lua/z2k-state-persist.lua", "files/z2k-diag.sh", "lib/config.sh", "lib/config_official.sh", "lib/install.sh", "lib/menu.sh", "quic_strats.ini", "webpanel/cgi/actions.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/credits.js", "webpanel/www/js/pages/policy.js", "webpanel/www/js/pages/strategies.js", "webpanel/www/js/pages/toggles.js", "z2k-detect/builds/z2k-detect-linux-386", "z2k-detect/builds/z2k-detect-linux-amd64", "z2k-detect/builds/z2k-detect-linux-arm", "z2k-detect/builds/z2k-detect-linux-arm64", "z2k-detect/builds/z2k-detect-linux-mips", "z2k-detect/builds/z2k-detect-linux-mips64le", "z2k-detect/builds/z2k-detect-linux-mipsle", "z2k-detect/builds/z2k-detect-linux-ppc64", "z2k-detect/builds/z2k-detect-linux-riscv64", "UPDATES.json"], "steps": ["regen-strategies", "regen-config", "validate-config", "refresh-binaries", "restart-service"], "full_install": false},
 {"v": "p-88.2", "type": "patch", "ts": "2026-11-14T20:46:32Z", "ref": "p-88.2", "desc": "WARP: исключения по доменам срабатывают сразу, в том числе на телефонах и компьютерах в сетях с IPv6, а открытые соединения больше не обрываются при смене маршрута. Если у провайдера есть IPv6, WARP теперь пропускает и его — сайты больше не открываются в обход WARP.", "changed_files": ["webpanel/www/index.html", "files/ndm/93-z2k-warp.sh", "files/z2k-warp-list-filter.awk", "files/z2k-warp.sh", "lib/install.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/warp.js", "z2k-warpd/builds/z2k-warpd-linux-amd64", "z2k-warpd/builds/z2k-warpd-linux-arm", "z2k-warpd/builds/z2k-warpd-linux-arm64", "z2k-warpd/builds/z2k-warpd-linux-mips", "z2k-warpd/builds/z2k-warpd-linux-mips64el", "z2k-warpd/builds/z2k-warpd-linux-mipsel", "z2k-warpd/builds/z2k-warpd-linux-mipsle", "z2k-warpd/builds/z2k-warpd-linux-ppc64", "z2k-warpd/builds/z2k-warpd-linux-riscv64", "z2k-warpd/builds/z2k-warpd-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
-{"v": "p-88.3", "type": "patch", "ts": "2026-11-14T22:14:46Z", "ref": "p-88.3", "desc": "Telegram снова работает через одно общее соединение, как до 10 ноября: вернули проверенную схему, с которой было меньше обрывов. Веб-версия WhatsApp снова открывается у тех, у кого не загружалась. В благодарностях появился новый спонсор — Den.", "changed_files": ["webpanel/www/index.html", "files/init.d/S98tg-tunnel", "files/ndm/90-z2k-tg-redirect.sh", "files/z2k-tg-redirect.sh", "files/z2k-tg-watchdog.sh", "lib/menu.sh", "mtproxy-client/builds/tg-mtproxy-client-linux-386", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64le", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsle", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false}
+{"v": "p-88.3", "type": "patch", "ts": "2026-11-14T22:14:46Z", "ref": "p-88.3", "desc": "Telegram снова работает через одно общее соединение, как до 10 ноября: вернули проверенную схему, с которой было меньше обрывов. Веб-версия WhatsApp снова открывается у тех, у кого не загружалась. В благодарностях появился новый спонсор — Den.", "changed_files": ["webpanel/www/index.html", "files/init.d/S98tg-tunnel", "files/ndm/90-z2k-tg-redirect.sh", "files/z2k-tg-redirect.sh", "files/z2k-tg-watchdog.sh", "lib/menu.sh", "mtproxy-client/builds/tg-mtproxy-client-linux-386", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64le", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsle", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
+{"v": "p-88.4", "type": "patch", "ts": "2026-11-16T12:33:47Z", "ref": "p-88.4", "desc": "Переключатели «YouTube без QUIC» и «Весь QUIC через TCP» теперь действительно ускоряют старт видео: роутер сразу отклоняет такое подключение, и браузер или приложение без ожидания переходит на обычное соединение. Раньше попытка просто терялась, и устройство ждало ответа.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lua/z2k-quic-reject.lua", "files/z2k-config-validator.sh", "lib/config_official.sh", "webpanel/www/js/pages/toggles.js", "z2k.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false}
   ]
 }
