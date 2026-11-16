@@ -121,7 +121,7 @@ fi
 # Без него подтверждение Z2K_TRUST_NEW_KEY бессмысленно: человеку нечем сверить
 # показанный отпечаток, и «сверьте с README» превращается в «подтвердите что
 # угодно».
-_README="$ROOT/README.md"
+_README="$ROOT/docs/user-guide.md"
 _KEY="$ROOT/files/etc/z2k-update-pub.pem"
 if [ -s "$_KEY" ] && [ -f "$_README" ]; then
     if command -v sha256sum >/dev/null 2>&1; then _h=$(sha256sum "$_KEY" | cut -d' ' -f1)
