@@ -1685,7 +1685,11 @@ print_netpath() {
     # А если на освободившийся 80-й вставала наша же панель, отчёт клеветал на
     # неё диагнозом «отнимает вебморду роутера».
     local _hp _hpn _h80
-    _hp=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
+    if [ "${_Z2K_NDMC_RC_SET:-0}" != "1" ]; then
+        _Z2K_NDMC_RC=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null)
+        _Z2K_NDMC_RC_SET=1
+    fi
+    _hp=$(printf '%s\n' "$_Z2K_NDMC_RC" \
           | sed -n 's/^[[:space:]]*ip http port[[:space:]]\{1,\}\([0-9]\{1,\}\).*/\1/p' | head -1)
     if [ -n "$_hp" ]; then _hpn="$_hp"; else _hpn=80; _hp="80 (умолчание)"; fi
     printf 'порт вебморды     : %s\n' "$_hp"
@@ -1766,8 +1770,19 @@ print_dns_check_snapshot() {
     _mi=$(grep -o '"verdict":"mismatch"' "$_snap" | wc -l | tr -d ' ')
     _un=$(grep -o '"verdict":"unknown"' "$_snap" | wc -l | tr -d ' ')
     _hi=$(grep -o '"verdict":"hijack"' "$_snap" | wc -l | tr -d ' ')
-    # Строка про резолвер роутера — то, чем пользуются клиенты.
-    _cur=$(tr ',' '\n' < "$_snap" | awk '/"name":"Резолвер роутера/ {f=1} f && /"udp":"/ {sub(/.*"udp":"/, ""); sub(/".*/, ""); print; exit}')
+    # Строка про текущий системный резолвер — то, чем реально пользуется роутер.
+    # При адресе не из 127.* в /etc/resolv.conf z2k-dns-check.sh пишет имя
+    # «Ваш DNS (...)» с признаком "current":1 (запасной поиск по имени оставлен
+    # для старых снимков без поля current).
+    _cur=$(tr -d '\r\n' < "$_snap" | sed 's/],"observations".*//' | tr '{}' '\n' | awk '
+        function get_udp(s) {
+            if (!match(s, /"udp":"[a-z]+"/)) return ""
+            return substr(s, RSTART + 7, RLENGTH - 8)
+        }
+        /"current":1([,} ]|$)/ { u = get_udp($0); if (u != "") { print u; exit } }
+        /"name":"(Резолвер роутера|Ваш DNS)/ && fb == "" { fb = get_udp($0) }
+        END { if (u == "" && fb != "") print fb }
+    ')
     case "$_cur" in
         proxy) _cur="резолвер роутера отдаёт свои прокси вместо сайтов" ;;
         spoof) _cur="резолвер роутера подменяет ответы" ;;
@@ -1814,7 +1829,11 @@ insta_pinned() {
     [ -n "$hosts" ] || return 0
     hosts="$hosts whatsapp.com whatsapp.net g.whatsapp.net static.whatsapp.net mmg.whatsapp.net pps.whatsapp.net dit.whatsapp.net v.whatsapp.net crashlogs.whatsapp.net"
     command -v ndmc >/dev/null 2>&1 || return 0
-    LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
+    if [ "${_Z2K_NDMC_RC_SET:-0}" != "1" ]; then
+        _Z2K_NDMC_RC=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null)
+        _Z2K_NDMC_RC_SET=1
+    fi
+    printf '%s\n' "$_Z2K_NDMC_RC" \
         | awk -v hosts="$hosts" '
             BEGIN { n = split(hosts, h, " "); for (i = 1; i <= n; i++) own[h[i]] = 1 }
             /^ip host/ && ($3 in own) && $4 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { print $3 "\t" $4 }'
@@ -1894,7 +1913,8 @@ Z2K_DIAG_LOGS="/opt/var/log/z2k-auto-update.log /opt/var/log/z2k-scheduler.log
 /tmp/z2k-warp/warpd.log /tmp/z2k-log/z2k-rt-proxy.log /tmp/z2k-log/z2k-http-tunnel.log
 /tmp/z2k-log/z2k-insta-refresh.log /tmp/z2k-log/z2k-webpanel-error.log
 /tmp/z2k-log/z2k-webpanel-sup.log /tmp/z2k-log/z2k-webpanel-startcheck.log
-/tmp/z2k-log/z2k-webpanel-wait.log /tmp/z2k-log/ndm-hook.log"
+/tmp/z2k-log/z2k-webpanel-wait.log /tmp/z2k-log/ndm-hook.log
+/tmp/z2k-log/gvsub.log"
 
 print_logs() {
     printf '\n=== errors across all logs ===\n'

@@ -86,5 +86,20 @@ assert_eq "журнал без дат: строк не показываем, н�
 assert_eq "секция ошибок ходит через окно" "1" \
     "$(sed -n '/^_print_errors_section/,/^}/p' "$DIAG" | grep -c 'z2k_recent_lines')"
 
+# Служба DNS-наблюдения YouTube (gvsub.log) входит в Z2K_DIAG_LOGS и читается сводкой ошибок.
+{
+    sed -n '/^Z2K_DIAG_LOGS="/,/"$/p' "$DIAG" | sed "s|/tmp|$SB/tmp|g; s|/opt|$SB/opt|g"
+    printf 'ERR_PER_FILE=6\nz2k_mask_addrs() { cat; }\n'
+    cat "$SB/fn.sh"
+    sed -n '/^_print_errors_section()/,/^}/p' "$DIAG"
+} > "$SB/err_sec.sh"
+mkdir -p "$SB/tmp/z2k-log"
+printf '%s 12:00:00 gvsub: nfqueue open error: permission denied\n' "$_new" > "$SB/tmp/z2k-log/gvsub.log"
+_gv_err=$("${Z2K_TEST_SH:-sh}" -c ". '$SB/err_sec.sh'; _print_errors_section")
+case "$_gv_err" in
+    *"gvsub.log"*"nfqueue open error"*) ok "ошибки из gvsub.log попадают в сводку всех логов" ;;
+    *) no "ошибки из gvsub.log попадают в сводку всех логов" "gvsub.log + текст ошибки" "$_gv_err" ;;
+esac
+
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

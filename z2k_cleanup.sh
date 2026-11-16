@@ -499,7 +499,7 @@ done
 # ответов DNS снимает подметание ниже (в них есть Z2K и NFQUEUE).
 _gvsub_pid=$(cat /var/run/z2k-gvsub.pid 2>/dev/null)
 [ -n "$_gvsub_pid" ] && kill "$_gvsub_pid" 2>/dev/null && log_info "  Остановлена служба подмены адресов"
-rm -f /var/run/z2k-gvsub.pid /tmp/z2k-gvsub.json
+rm -f /var/run/z2k-gvsub.pid /tmp/z2k-gvsub.json /tmp/z2k-gvsub.json.neutral /tmp/z2k-gv-ips.txt
 
 # Поиск и удаление любых оставшихся правил с упоминанием nfqws/zapret в базовых цепочках.
 # Через -S: так правило снимается целиком и не зависит от номеров строк.
@@ -515,6 +515,10 @@ for fw_tool in iptables ip6tables; do
                         && log_info "  Удалено правило $parent из $table ($fw_tool)"
                 done
         done
+        if [ "$table" = mangle ]; then
+            "$fw_tool" -w -t mangle -F Z2K_MSS 2>/dev/null
+            "$fw_tool" -w -t mangle -X Z2K_MSS 2>/dev/null && log_info "  Удалена mangle/Z2K_MSS ($fw_tool)"
+        fi
         # 10.11.2026: после удаления службы отказ QUIC остаться не должен.
         if [ "$table" = filter ]; then
             "$fw_tool" -w -t filter -F Z2K_GVSUB_Q 2>/dev/null

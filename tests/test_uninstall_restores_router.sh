@@ -228,6 +228,43 @@ _z2k_sweep_our_rules" >/dev/null 2>&1
 grep -q 'queue-num 200' "$tmp/r.log" && ok "наша очередь 200 снята" || bad "наша очередь 200 осталась"
 grep -q 'queue-num 300' "$tmp/r.log" && bad "снята чужая очередь 300" || ok "чужая очередь 300 цела"
 
+# Цепочка mangle/Z2K_MSS (прыжок ставится без комментария z2k) и служебные файлы gvsub.
+mkdir -p "$tmp/mss"
+cat > "$tmp/mss/iptables" <<'EOF'
+#!/bin/sh
+case "$*" in
+  *"-t mangle -S FORWARD"*) echo '-A FORWARD -i ppp0 -p tcp -m tcp --tcp-flags SYN,RST SYN -j Z2K_MSS'; echo '-A FORWARD -i br0 -j ACCEPT' ;;
+  *" -S "*) ;;
+  *) echo "${0##*/} $*" >> "$M_LOG" ;;
+esac
+exit 0
+EOF
+cp "$tmp/mss/iptables" "$tmp/mss/ip6tables"
+printf '#!/bin/sh\necho "rm $*" >> "$M_LOG"\nexit 0\n' > "$tmp/mss/rm"
+printf '#!/bin/sh\nexit 1\n' > "$tmp/mss/pidof"
+chmod +x "$tmp/mss/iptables" "$tmp/mss/ip6tables" "$tmp/mss/rm" "$tmp/mss/pidof"
+: > "$tmp/m.log"
+PATH="$tmp/mss:$PATH" M_LOG="$tmp/m.log" ZAPRET2_DIR="$tmp/none" sh -c "$RFN
+_z2k_sweep_our_rules" >/dev/null 2>&1
+for _fam in iptables ip6tables; do
+    for _cmd in '-D FORWARD -i ppp0 -p tcp -m tcp --tcp-flags SYN,RST SYN -j Z2K_MSS' '-F Z2K_MSS' '-X Z2K_MSS'; do
+        grep -qF -- "$_fam -w -t mangle $_cmd" "$tmp/m.log" && ok "install $_fam: $_cmd" || bad "install $_fam: нет [$_cmd]"
+    done
+done
+grep -qF -- '/tmp/z2k-gvsub.json.neutral' "$tmp/m.log" && grep -qF -- '/tmp/z2k-gv-ips.txt' "$tmp/m.log" \
+    && ok "install: служебные файлы gvsub сняты" || bad "install: служебные файлы gvsub остались"
+_cl_mss=$(awk '/^_gvsub_pid=/,/^done$/' "$CLEANUP")
+: > "$tmp/m.log"
+PATH="$tmp/mss:$PATH" M_LOG="$tmp/m.log" sh -c 'log_info() { :; }
+'"$_cl_mss" >/dev/null 2>&1
+for _fam in iptables ip6tables; do
+    for _cmd in '-D FORWARD -i ppp0 -p tcp -m tcp --tcp-flags SYN,RST SYN -j Z2K_MSS' '-F Z2K_MSS' '-X Z2K_MSS'; do
+        grep -qF -- "$_fam -w -t mangle $_cmd" "$tmp/m.log" && ok "cleanup $_fam: $_cmd" || bad "cleanup $_fam: нет [$_cmd]"
+    done
+done
+grep -qF -- '/tmp/z2k-gvsub.json.neutral' "$tmp/m.log" && grep -qF -- '/tmp/z2k-gv-ips.txt' "$tmp/m.log" \
+    && ok "cleanup: служебные файлы gvsub сняты" || bad "cleanup: служебные файлы gvsub остались"
+
 # Снятие PPE не виснет, если правило видно, а снять его нельзя.
 mkdir -p "$tmp/p"
 printf '#!/bin/sh\ncase "$*" in *-D*) exit 1 ;; esac\nexit 0\n' > "$tmp/p/iptables"; cp "$tmp/p/iptables" "$tmp/p/ip6tables"; chmod +x "$tmp/p/iptables" "$tmp/p/ip6tables"
