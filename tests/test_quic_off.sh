@@ -2,9 +2,12 @@
 # tests/test_quic_off.sh — тумблеры «YouTube без QUIC» (Z2K_YT_QUIC_OFF) и
 # «Весь QUIC через TCP» (Z2K_QUIC_OFF).
 #
-# Механизм — профиль с drop на QUIC Initial ПЕРЕД профилем обхода QUIC: движок
-# берёт первый подходящий профиль, и стоящий после него drop не сработал бы
-# никогда. Проверяется исполнением генератора, панели и пересборки конфига.
+# Механизм — профиль с отказом (z2k_quic_reject) на QUIC Initial ПЕРЕД профилем
+# обхода QUIC: движок берёт первый подходящий профиль, и стоящий после него
+# профиль не сработал бы никогда. Без lua/z2k-quic-reject.lua (патч ещё не
+# доехал) генератор оставляет прежний тихий drop — разделы 2–3 проверяют этот
+# запасной путь, раздел 3а — отказ. Проверяется исполнением генератора, панели и
+# пересборки конфига.
 # POSIX sh (busybox ash).
 
 ROOT=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
@@ -97,6 +100,47 @@ fi
 OUT=$(gen both "Z2K_QUIC_OFF=1" "Z2K_YT_QUIC_OFF=1")
 N=$(printf '%s\n' "$OUT" | grep -c -F -- '--lua-desync=drop')
 [ "$N" = 1 ] && ok "оба включены — один профиль на весь QUIC" || bad "оба включены — профилей drop: $N"
+
+# --- 3а. С lua-файлом — отказ вместо тихого сброса ------------------------------
+genrej() { # то же, что gen, но с lua/z2k-quic-reject.lua на месте
+    local tag="$1"; shift
+    local root; root=$(mkroot "$tag")
+    mkdir -p "$root/lua"
+    cp "$ROOT/files/lua/z2k-quic-reject.lua" "$root/lua/"
+    for l in "$@"; do echo "$l" >> "$root/config"; done
+    ( ZAPRET2_DIR="$root" generate_nfqws2_opt_from_strategies 2>/dev/null ) \
+        | awk -f "$ROOT/tests/lib/nfqws2_flatten.awk"
+}
+for c in "yt:Z2K_YT_QUIC_OFF=1:/UDP/YT/List.txt" "all:Z2K_QUIC_OFF=1:"; do
+    tag=${c%%:*}; rest=${c#*:}; kv=${rest%%:*}; list=${rest#*:}
+    OUT=$(genrej "rej-$tag" "$kv")
+    REJ=$(printf '%s\n' "$OUT" | grep -F -- '--lua-desync=z2k_quic_reject' | head -1)
+    if [ -n "$REJ" ]; then
+        ok "$kv: профиль с отказом есть"
+        has "--filter-udp=443" "$REJ" && has "--filter-l7=quic" "$REJ" \
+            && has "--payload=quic_initial" "$REJ" \
+            && ok "$kv: отказ только на QUIC Initial на 443" || bad "$kv: фильтр не тот: $REJ"
+        if [ -n "$list" ]; then
+            has "$list" "$REJ" && ok "$kv: отказ ограничен списком" || bad "$kv: без списка: $REJ"
+        fi
+        has "whitelist.txt" "$REJ" && ok "$kv: исключения не трогаются" || bad "$kv: нет исключений: $REJ"
+        D=$(line_of '--lua-desync=z2k_quic_reject' "$OUT"); Q=$(line_of 'key=quic' "$OUT")
+        [ -n "$Q" ] && [ "$D" -lt "$Q" ] && ok "$kv: отказ стоит перед профилем обхода QUIC" \
+            || bad "$kv: отказ не перед профилем QUIC (rej=$D quic=$Q)"
+    else
+        bad "$kv: профиля с отказом нет"
+    fi
+    has "--lua-desync=drop" "$OUT" && bad "$kv: тихий drop остался рядом с отказом" \
+        || ok "$kv: тихого drop нет"
+done
+OUT=$(genrej rej-off)
+has "z2k_quic_reject" "$OUT" && bad "тумблеры выключены, а отказ стоит" || ok "тумблеры выключены — отказа нет"
+
+# Отказ вписан в профиль по имени: движок должен его загружать, валидатор знать.
+grep -q 'lua/z2k-quic-reject.lua' "$ROOT/files/S99zapret2.new" \
+    && ok "S99 загружает z2k-quic-reject.lua" || bad "S99 не загружает z2k-quic-reject.lua"
+grep -qw 'z2k_quic_reject' "$ROOT/files/z2k-config-validator.sh" \
+    && ok "валидатор знает z2k_quic_reject" || bad "валидатор не знает z2k_quic_reject"
 
 # --- 4. Пересборка конфига сохраняет выбор человека ---------------------------
 regen() { # $1 - тег, $2 - строка конфига; печатает строки ключей после пересборки

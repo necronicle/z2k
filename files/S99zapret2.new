@@ -1334,6 +1334,12 @@ LUA_Z2K_TCP16="$ZAPRET_BASE/lua/z2k-tcp16.lua"
 # инстанс z2k_preflight в профиле валил бы движок в error на каждом пакете.
 LUA_Z2K_PREFLIGHT="$ZAPRET_BASE/lua/z2k-preflight.lua"
 [ -f "$LUA_Z2K_PREFLIGHT" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_PREFLIGHT"
+# z2k-quic-reject.lua — отказ QUIC для тумблеров «YouTube без QUIC» и «Весь QUIC
+# через TCP». Грузится ПОСЛЕ zapret-lib.lua (direction_cutoff_opposite,
+# payload_check, replay_first); генератор ставит z2k_quic_reject только при
+# наличии файла, иначе прежний drop.
+LUA_Z2K_QUIC_REJECT="$ZAPRET_BASE/lua/z2k-quic-reject.lua"
+[ -f "$LUA_Z2K_QUIC_REJECT" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_QUIC_REJECT"
 # z2k-silence.lua — детектор «сервер молчит», жил здесь 11.09.2026 (p-84.4 …
 # p-84.6) и снят в тот же день: он ловил класс блока, который штатным признакам
 # не виден (сервер подтверждает ClientHello и молчит), но платой была ротация

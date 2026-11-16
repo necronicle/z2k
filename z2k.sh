@@ -1397,6 +1397,18 @@ download_init_script() {
         die "Ошибка загрузки files/lua/z2k-preflight.lua"
     fi
 
+    # z2k-quic-reject.lua — отказ QUIC для «YouTube без QUIC» и «Весь QUIC через
+    # TCP». Профиль ссылается на функцию по имени (z2k_quic_reject); генератор
+    # ставит её только при наличии файла, но без него тумблеры вернутся к тихому
+    # drop, который ничего не ускоряет.
+    url="${GITHUB_RAW}/files/lua/z2k-quic-reject.lua"
+    output="${lua_dir}/z2k-quic-reject.lua"
+    if z2k_fetch "$url" "$output"; then
+        print_success "Загружено: files/lua/z2k-quic-reject.lua"
+    else
+        die "Ошибка загрузки files/lua/z2k-quic-reject.lua"
+    fi
+
     # z2k-alert.lua и z2k-quic-silence.lua — поправки к штатному детектору
     # неудач и детектор молчания QUIC. Профили ссылаются на функции по имени
     # (failure_detector=z2k_fail_tls_alert / z2k_fail_quic_silence), поэтому

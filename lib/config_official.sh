@@ -1700,16 +1700,25 @@ generate_nfqws2_opt_from_strategies() {
     # первым намеренно: так видно, что профиль вырос из него, а не появился из
     # ниоткуда.
     # QUIC мимо обхода: тумблеры «YouTube без QUIC» (Z2K_YT_QUIC_OFF) и «Весь
-    # QUIC через TCP» (Z2K_QUIC_OFF). Где QUIC провайдер режет, браузер ждёт
-    # ответа, прежде чем перейти на TCP, и ролик висит на старте. Здесь Initial
-    # не уходит вовсе, рукопожатие не начинается, и браузер сразу идёт по TCP, где
-    # работают плечи и обход видео. Профиль стоит ПЕРЕД профилем QUIC: движок
+    # QUIC через TCP» (Z2K_QUIC_OFF). Initial к серверу не уходит, а клиент
+    # получает отказ (lua/z2k-quic-reject.lua: ICMP «порт недоступен» от имени
+    # сервера) и сразу идёт по TCP, где работают плечи и обход видео. Тихий drop
+    # здесь стоял до 16.11.2026 и ничего не давал: для клиента он неотличим от
+    # блокировки QUIC провайдером — клиент так же ждёт и повторяет Initial, а
+    # повторы после окна очереди уходили мимо движка. Без lua-файла (патч ещё не
+    # доехал) остаётся прежний drop. Профиль стоит ПЕРЕД профилем QUIC: движок
     # берёт первый подходящий. Исключения (whitelist, выключенный YouTube) не
     # трогаем — wl_excl. Оба по умолчанию выключены.
     local quic_off yt_quic_off
     quic_off=$(safe_config_read "Z2K_QUIC_OFF" "${ZAPRET2_DIR:-/opt/zapret2}/config" "0")
     yt_quic_off=$(safe_config_read "Z2K_YT_QUIC_OFF" "${ZAPRET2_DIR:-/opt/zapret2}/config" "0")
-    local quic_drop="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=drop --new"
+    local quic_refuse="drop"
+    if [ -f "${ZAPRET2_DIR:-/opt/zapret2}/lua/z2k-quic-reject.lua" ]; then
+        quic_refuse="z2k_quic_reject"
+    elif [ "$quic_off" = "1" ] || [ "$yt_quic_off" = "1" ]; then
+        echo "WARN: lua/z2k-quic-reject.lua отсутствует — QUIC выкидывается без отказа" 1>&2
+    fi
+    local quic_drop="--filter-udp=443 --filter-l7=quic --payload=quic_initial --lua-desync=$quic_refuse --new"
     if [ "$quic_off" = "1" ]; then
         nfqws2_opt_lines="$nfqws2_opt_lines$wl_excl $quic_drop\\n"
     elif [ "$yt_quic_off" = "1" ] && [ "$category_youtube" != 0 ] \
@@ -2856,7 +2865,7 @@ Z2K_SNI_STALL=${saved_Z2K_SNI_STALL}
 # одного перезапуска мало.
 ${_gv_preflight_line}
 ${saved_Z2K_PROVIDER_CACHE:+Z2K_PROVIDER_CACHE=$saved_Z2K_PROVIDER_CACHE}
-# QUIC мимо обхода: Initial не пропускается, браузер сразу идёт по TCP.
+# QUIC мимо обхода: роутер отказывает QUIC, браузер и приложения сразу идут по TCP.
 # Z2K_YT_QUIC_OFF=1 — только YouTube («YouTube без QUIC»), Z2K_QUIC_OFF=1 — весь
 # QUIC («Весь QUIC через TCP»). Пока ключа нет — выключено (умолчание версии).
 # Тумблеры в панели, «Режимы»; при ручной правке нужна пересборка конфига.

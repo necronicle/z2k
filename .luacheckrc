@@ -17,6 +17,9 @@ globals = {
     -- Десинк-функцию движок ищет по имени в _G, а таблица состояний глобальна,
     -- потому что переживает повторную загрузку файла и бьётся юнит-тестом.
     "z2k_preflight", "z2k_pf_flows", "z2k_preflight_syn_timer",
+    -- Отказ QUIC (files/lua/z2k-quic-reject.lua): десинк-функцию движок ищет
+    -- по имени в _G, сборку пакета бьёт напрямую юнит-тест.
+    "z2k_quic_reject", "z2k_quic_reject_packet",
     -- Поправки к штатному детектору неудач (files/lua/z2k-alert.lua) и
     -- детектор молчания QUIC (files/lua/z2k-quic-silence.lua). Движок ищет и
     -- детектор, и таймер-функцию по имени в _G.
@@ -66,7 +69,9 @@ read_globals = {
     "l3_base_len",
     "l3_extra_len",
     "l4_len",
+    "rawsend",
     "rawsend_dissect",
+    "reconstruct_dissect",
     "rawsend_dissect_ipfrag",
     "rawsend_payload_segmented",
     "blob",
