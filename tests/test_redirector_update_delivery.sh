@@ -6,7 +6,12 @@ SB=$(mktemp -d); trap 'rm -rf "$SB"' EXIT
 export ZAPRET2_DIR="$SB/zd" CONFIG_FILE="$SB/zd/config" Z2K_AU_SOURCE_ONLY=1
 export Z2K_AU_LOG_FILE="$SB/log"
 export Z2K_AU_INSTALLED_TAG_FILE="$SB/tag" Z2K_AU_TMP_DIR="$SB/tmp"
-mkdir -p "$SB/zd/lib" "$SB/tmp"
+mkdir -p "$SB/zd/lib" "$SB/tmp" "$SB/bin"
+# This case tests delivery, not package provisioning. Supply its dependency
+# explicitly so it cannot invoke the host's package manager or race a 5s poll.
+printf '#!/bin/sh\nexit 0\n' > "$SB/bin/flock"
+chmod +x "$SB/bin/flock"
+PATH="$SB/bin:$PATH"; export PATH
 git -C "$ROOT" show p-87.12:lib/auto_update.sh > "$SB/old-updater.sh"
 . "$ROOT/lib/utils.sh"
 . "$SB/old-updater.sh"
@@ -46,8 +51,8 @@ au_health_check() { return 0; }
 printf 'p-old\n' > "$SB/tag"
 au_apply_converge p-test
 n=0
-while [ ! -s "$SB/zd/worker-args" ] && [ "$n" -lt 5 ]; do sleep 1; n=$((n+1)); done
+while [ ! -s "$SB/zd/worker-args" ] && [ "$n" -lt 15 ]; do sleep 1; n=$((n+1)); done
 printf '%s\n' --after-update p-test "$SB/tag" > "$SB/expected"
 cmp "$SB/expected" "$SB/zd/worker-args"
 [ "$(cat "$SB/tag")" = p-test ]
-printf '[PASS] published updater delivers new refresher and launches it with success marker\n'
+printf '[PASS] published updater delivers retirement worker and launches it with success marker\n'

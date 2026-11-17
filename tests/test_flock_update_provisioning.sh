@@ -5,8 +5,8 @@
 # The installer lists the package since p-87.13; routers installed earlier get
 # it from the post-commit worker in au_run_steps, which the PUBLISHED old
 # updater runs from the delivered lib/auto_update.sh. These cases run that real
-# path: an old updater, the redirector DNS feature switched off (its refresher
-# exits before its own flock provisioning), a host PATH with flock hidden, and
+# path: an old updater, the retired redirector toggle switched off,
+# a host PATH with flock hidden, and
 # a recording opkg stub. No package manager or network is touched.
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 PASS=0; FAIL=0
@@ -44,12 +44,14 @@ EOF
     cat > "$SB/stub/ndmc" <<EOF
 #!/bin/sh
 echo "ndmc \$*" >> "$SB/ndmc.calls"
+printf 'system\n'
 EOF
     chmod +x "$SB/stub/opkg" "$SB/stub/ndmc"
     [ "$3" = yes ] && { printf '#!/bin/sh\nexit 0\n' > "$SB/stub/flock"; chmod +x "$SB/stub/flock"; }
     git -C "$ROOT" show "$1:lib/auto_update.sh" > "$SB/old-updater.sh" || return 1
     (
         PATH="$SB/stub:$HOSTBIN"
+        export Z2K_STUB_PATH="$SB/stub:$HOSTBIN"
         export PATH ZAPRET2_DIR="$SB/zd" CONFIG_FILE="$SB/zd/config" Z2K_AU_SOURCE_ONLY=1
         export Z2K_AU_LOG_FILE="$SB/log" Z2K_AU_INSTALLED_TAG_FILE="$SB/tag" Z2K_AU_TMP_DIR="$SB/tmp"
         . "$ROOT/lib/utils.sh"
@@ -105,7 +107,7 @@ for old in p-87.12 p-87.15; do
     eq "$old updater: flock is available afterwards" yes "$have"
     grep -q 'flock установлен' "$SB/log" && logged=yes || logged=no
     eq "$old updater: installation is logged" yes "$logged"
-    eq "$old updater: redirector DNS stays untouched when switched off" '' "$(calls ndmc.calls)"
+    eq "$old updater: retirement cleanup reads DNS even when old toggle is off" 'ndmc -c show running-config|' "$(calls ndmc.calls)"
 
     run_update "$old" fail no
     eq "$old updater, opkg fails: update still commits (no rollback)" '0 p-test' "$(cat "$SB/rc") $(cat "$SB/tag")"

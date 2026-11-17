@@ -4605,6 +4605,7 @@ step_finalize() {
         print_info "Адреса Instagram/WhatsApp обновляются в фоне (журнал: /tmp/z2k-log/z2k-insta-refresh.log)"
     fi
 
+    # Historical script now only removes the retired redirector DNS overrides.
     if [ -x "${ZAPRET2_DIR}/z2k-redirector-ip-refresh.sh" ]; then
         ( trap "" HUP; sh "${ZAPRET2_DIR}/z2k-redirector-ip-refresh.sh" ) </dev/null >/dev/null 2>&1 &
     fi

@@ -1250,6 +1250,7 @@ au_run_steps() {
         fi
     done
     # Old updaters load this delivered function before their health check.
+    # The historical redirector worker now ONLY cleans the retired DNS pins.
     # The worker waits for their success marker; rollback never advances it.
     local redirector_refresh="${ZAPRET2_DIR:-/opt/zapret2}/z2k-redirector-ip-refresh.sh"
     local redirector_tag_file="${Z2K_AU_INSTALLED_TAG_FILE:-${ZAPRET2_DIR:-/opt/zapret2}/.z2k-installed-tag}"
@@ -1260,7 +1261,8 @@ au_run_steps() {
         ( trap "" HUP
           au_provision_flock "$target_tag" "$redirector_tag_file" || exit 0
           [ -x "$redirector_refresh" ] || exit 0
-          sh "$redirector_refresh" --after-update "$target_tag" "$redirector_tag_file"
+          sh "$redirector_refresh" --after-update "$target_tag" "$redirector_tag_file" || \
+              au_log "FAIL: не удалось очистить старые DNS-записи redirector.googlevideo.com"
         ) </dev/null >/dev/null 2>&1 &
     fi
     return 0
