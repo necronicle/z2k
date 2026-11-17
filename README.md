@@ -80,9 +80,34 @@ opkg install coreutils-sort curl grep gzip ipset iptables kmod_ndms xtables-addo
 <details>
 <summary>Если Entware не устанавливается или загрузка пакетов зависает</summary>
 
-Если сервер пакетов Entware недоступен из вашей сети, воспользуйтесь [офлайн-установщиком Entware](https://github.com/necronicle/entware-offline): пакеты уже находятся внутри архива. В репозитории есть варианты для разных архитектур, инструкция и контрольные суммы.
+#### Если `opkg update` висит или обрывается
 
-Если Entware уже установлен, но зависимости загрузить не удалось, обратитесь в группу проекта. Менять конфигурационные файлы вручную не требуется.
+У части провайдеров сервер пакетов Entware (`bin.entware.net`) обрывает загрузку на первых десятках килобайт, и `opkg` висит без конца. Возьмите пакеты через зеркало на узле проекта z2k — оно отдаёт только `bin.entware.net` и больше ничего:
+
+```bash
+sed -i 's|http://bin.entware.net|http://85.192.60.175/entware|g' /opt/etc/opkg.conf
+sed -i 's|http://213.176.74.63/entware|http://85.192.60.175/entware|g' /opt/etc/opkg.conf
+opkg update
+opkg install coreutils-sort curl grep gzip ipset iptables kmod_ndms xtables-addons_legacy openssl-util
+sed -i 's|http://85.192.60.175/entware|http://bin.entware.net|g' /opt/etc/opkg.conf
+```
+
+Последняя строка возвращает основной сервер в настройки `opkg`.
+
+Сам установщик z2k ставит и обновляет пакеты через узел и без этого шага.
+
+Стороннее зеркало вместо узла подойдёт, только если у вас стоит полноценный wget (пакет `wget-ssl`): встроенный в Entware busybox wget не умеет https, а по http зеркало ему отказывает.
+
+```bash
+sed -i 's|http://bin.entware.net|https://mirrors.bfsu.edu.cn/entware|g' /opt/etc/opkg.conf
+opkg update
+```
+
+Вернуть основной сервер: `sed -i 's|https://mirrors.bfsu.edu.cn/entware|http://bin.entware.net|g' /opt/etc/opkg.conf`
+
+#### Если Entware не устанавливается
+
+Официальный установщик Entware во время установки сам качает пакеты с того же `bin.entware.net`, поэтому на таких линиях установка обрывается. Для этого случая есть офлайн-установщики: официальный установщик с пакетами внутри, сеть при установке не нужна. Архивы для всех архитектур, инструкция и контрольные суммы — в репозитории [entware-offline](https://github.com/necronicle/entware-offline).
 
 </details>
 
