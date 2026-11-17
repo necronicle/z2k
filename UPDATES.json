@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 187,
-  "current": "p-88.6",
+  "seq": 188,
+  "current": "p-88.7",
   "install_map": {
   "common/ipt.sh": ["/opt/zapret2/common/ipt.sh"],
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
@@ -228,18 +228,18 @@
   "files/z2k-insta-ip-refresh.sh": "a39615ddc4a6422ebda2114eefaa554454358c237a3d324ad6f4961f78e75bcf",
   "files/z2k-nfqueue-selfheal.sh": "280f0811daf5d83d2f214dd34234e435c8c639f6ef8544154a481448be1f24b3",
   "files/z2k-ppe-deoffload.sh": "7d14e9e43718bcf2521d86d9634c68e09de79acb33be782ea1e18eef3a11f8b7",
-  "files/z2k-redirector-ip-refresh.sh": "ac950492af5797d3be07ca8dcc75b9e24692745875495679ed38f5c0e7a6348b",
+  "files/z2k-redirector-ip-refresh.sh": "5f6f0d8d9c0005c2d71d8c922478e82678a57086d0c01b9cebcf52963f4ea251",
   "files/z2k-scheduler.sh": "e0281a08fc431f58f6fcb6d5c1c09a5221705e37e8b9f0eb826438fed9acb23e",
   "files/z2k-tcp16-probe.sh": "18f4132f15cce77f7a614998ce448d480c05c170857630e1ac75975fb46ea388",
   "files/z2k-tg-redirect.sh": "3439ac8bc3ebd5f4780c0b975ae64632e3d4ac9383d76df9f304e19cc22aa8f4",
   "files/z2k-tg-watchdog.sh": "374269b1985652d8cd3b24f7d0e4734a16d86716cb8c19103fb4239631896cd1",
-  "files/z2k-update-lists.sh": "906a457ce327c7c141c6cd3a2d43fdf7a412ebc74a2f42ecf825dc953956c4e5",
+  "files/z2k-update-lists.sh": "5b2dc267e19d14a54482b0c442a61e749b6756ef513eba075d78729124685539",
   "files/z2k-warp-list-filter.awk": "f9af0f77db14538533810089fc8607705335e23d8c22cb125f1d84987b3344f8",
   "files/z2k-warp.sh": "543cf65324279cac65a2cb62d2f62fe3283e3cf0570db6424025ddea220831d2",
-  "lib/auto_update.sh": "1f1f5581684d68490ce501c1b02341f3486b3931f3a62858aef3854dd85c22ed",
+  "lib/auto_update.sh": "6f6aa297c9c660b2d0e3f73230f40e27b4b7df7b7346a68d6e1c9c8c6906bf4c",
   "lib/config.sh": "48ce8a12848dc893ff8b102dc607f9079369b17132a440971dd29870ae852614",
   "lib/config_official.sh": "dbebdb4b1739df361ccdf21152b41e9cd4ad3d1ee7c8bb19a0a2841dd5f7f6ba",
-  "lib/install.sh": "2bed5e22e9eba1c4797e4c61454a095b29f93d656c935c015dc045f5d121b625",
+  "lib/install.sh": "5288d8bb483e97fafac97d3a43e261bc701140b00ecbfe6bd37d3184fc076f9e",
   "lib/menu.sh": "f7c13998b2c489817f0a8db4d4e6958e43ba8b118b89189c061ebbd7616558ba",
   "lib/strategies.sh": "87f1ced9815120a019ef1f7f9256e212ca8e32374ea213fd1fc839e3e51fa705",
   "lib/utils.sh": "a7fbfcfb5935f3571b1849e7a60c2dc5f65479fdc65e8208e98d18c6d6a8aff4",
@@ -284,7 +284,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "cdb70663a90b6d6efae402b149b5a3e6465a5a1229a2b0dfb00653b1e2695957",
+  "webpanel/www/index.html": "ca3c89625ccc6ef6988990948d8c539745bceb7aa84ab83ca23b38f2aa3e2d5d",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -668,6 +668,7 @@
 {"v": "p-88.2", "type": "patch", "ts": "2026-11-14T20:46:32Z", "ref": "p-88.2", "desc": "WARP: исключения по доменам срабатывают сразу, в том числе на телефонах и компьютерах в сетях с IPv6, а открытые соединения больше не обрываются при смене маршрута. Если у провайдера есть IPv6, WARP теперь пропускает и его — сайты больше не открываются в обход WARP.", "changed_files": ["webpanel/www/index.html", "files/ndm/93-z2k-warp.sh", "files/z2k-warp-list-filter.awk", "files/z2k-warp.sh", "lib/install.sh", "webpanel/cgi/api.sh", "webpanel/www/js/pages/warp.js", "z2k-warpd/builds/z2k-warpd-linux-amd64", "z2k-warpd/builds/z2k-warpd-linux-arm", "z2k-warpd/builds/z2k-warpd-linux-arm64", "z2k-warpd/builds/z2k-warpd-linux-mips", "z2k-warpd/builds/z2k-warpd-linux-mips64el", "z2k-warpd/builds/z2k-warpd-linux-mipsel", "z2k-warpd/builds/z2k-warpd-linux-mipsle", "z2k-warpd/builds/z2k-warpd-linux-ppc64", "z2k-warpd/builds/z2k-warpd-linux-riscv64", "z2k-warpd/builds/z2k-warpd-linux-x86", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-88.3", "type": "patch", "ts": "2026-11-14T22:14:46Z", "ref": "p-88.3", "desc": "Telegram снова работает через одно общее соединение, как до 10 ноября: вернули проверенную схему, с которой было меньше обрывов. Веб-версия WhatsApp снова открывается у тех, у кого не загружалась. В благодарностях появился новый спонсор — Den.", "changed_files": ["webpanel/www/index.html", "files/init.d/S98tg-tunnel", "files/ndm/90-z2k-tg-redirect.sh", "files/z2k-tg-redirect.sh", "files/z2k-tg-watchdog.sh", "lib/menu.sh", "mtproxy-client/builds/tg-mtproxy-client-linux-386", "mtproxy-client/builds/tg-mtproxy-client-linux-amd64", "mtproxy-client/builds/tg-mtproxy-client-linux-arm", "mtproxy-client/builds/tg-mtproxy-client-linux-arm64", "mtproxy-client/builds/tg-mtproxy-client-linux-mips", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64el", "mtproxy-client/builds/tg-mtproxy-client-linux-mips64le", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsel", "mtproxy-client/builds/tg-mtproxy-client-linux-mipsle", "mtproxy-client/builds/tg-mtproxy-client-linux-ppc64", "mtproxy-client/builds/tg-mtproxy-client-linux-riscv64", "mtproxy-client/builds/tg-mtproxy-client-linux-x86", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": ["refresh-binaries"], "full_install": false},
 {"v": "p-88.4", "type": "patch", "ts": "2026-11-16T12:33:47Z", "ref": "p-88.4", "desc": "Переключатели «YouTube без QUIC» и «Весь QUIC через TCP» теперь действительно ускоряют старт видео: роутер сразу отклоняет такое подключение, и браузер или приложение без ожидания переходит на обычное соединение. Раньше попытка просто терялась, и устройство ждало ответа.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lua/z2k-quic-reject.lua", "files/z2k-config-validator.sh", "lib/config_official.sh", "webpanel/www/js/pages/toggles.js", "z2k.sh", "UPDATES.json"], "steps": ["regen-config", "validate-config", "restart-service"], "full_install": false},
-{"v": "p-88.6", "type": "patch", "ts": "2026-11-16T16:42:08Z", "ref": "p-88.6", "desc": "Улучшена диагностика: отчёт включает дополнительные ошибки и точнее показывает настройки. Исправлена очистка после удаления, обновлена инструкция по установке и работе с веб-панелью.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "lib/install.sh", "webpanel/cgi/actions.sh", "UPDATES.json"], "steps": [], "full_install": false}
+{"v": "p-88.6", "type": "patch", "ts": "2026-11-16T16:42:08Z", "ref": "p-88.6", "desc": "Улучшена диагностика: отчёт включает дополнительные ошибки и точнее показывает настройки. Исправлена очистка после удаления, обновлена инструкция по установке и работе с веб-панелью.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "lib/install.sh", "webpanel/cgi/actions.sh", "UPDATES.json"], "steps": [], "full_install": false},
+{"v": "p-88.7", "type": "patch", "ts": "2026-11-17T21:15:20Z", "ref": "p-88.7", "desc": "Удалена статическая подмена DNS для redirector.googlevideo.com. Обновление автоматически очищает старые записи этого имени в Keenetic; остальные настройки DNS сохраняются.", "changed_files": ["webpanel/www/index.html", "files/z2k-redirector-ip-refresh.sh", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/install.sh", "UPDATES.json"], "steps": [], "full_install": false}
   ]
 }
