@@ -42,6 +42,7 @@ case "$*" in
   *"-t filter -S FORWARD"*) echo "-A FORWARD -j Z2K_GVSUB_Q" ;;
   *"-t nat -S PREROUTING"*)   echo "-A PREROUTING -j Z2K_GVSUB" ;;
   *"-t mangle -S OUTPUT"*)    echo "-A OUTPUT -p udp -m udp --sport 53 -m string --string \"googlevideo\" --algo bm --to 65535 -j NFQUEUE --queue-num 210 --queue-bypass" ;;
+  *"-t mangle -S FORWARD"*)   echo "-A FORWARD -o br+ -p udp -m udp --sport 53 -m conntrack --ctstate ESTABLISHED -m string --string \"googlevideo\" --algo bm --to 65535 --icase -j NFQUEUE --queue-num 210 --queue-bypass" ;;
   *" -S "*) ;;
   *) echo "${0##*/} $*" >> "$SWLOG" ;;
 esac
@@ -53,7 +54,10 @@ SWLOG="$TMP/swlog"; : > "$SWLOG"
   ZAPRET2_DIR="$TMP/none" _z2k_sweep_our_rules )
 SWL=$(cat "$SWLOG")
 has "-t nat -D PREROUTING -j Z2K_GVSUB" "$SWL" && ok "удаление снимает крючок цепочки подмены" || bad "крючок Z2K_GVSUB остаётся после удаления"
-has "--queue-num 210 --queue-bypass" "$SWL" && ok "удаление снимает очередь ответов DNS" || bad "очередь ответов DNS остаётся после удаления"
+has "-t mangle -D OUTPUT" "$SWL" && has "--queue-num 210 --queue-bypass" "$SWL" \
+    && ok "удаление снимает очередь ответов DNS в OUTPUT" || bad "очередь ответов DNS в OUTPUT остаётся после удаления"
+has "-t mangle -D FORWARD" "$SWL" && has "--ctstate ESTABLISHED" "$SWL" \
+    && ok "удаление снимает очередь ответов DNS в FORWARD" || bad "очередь ответов DNS в FORWARD остаётся после удаления"
 has "-t nat -X Z2K_GVSUB" "$SWL" && ok "удаление удаляет сами цепочки" || bad "цепочки Z2K_GVSUB остаются"
 grep -q 'z2k-gvsub.pid' "$ROOT/z2k_cleanup.sh" && grep -q 'X Z2K_GVSUB' "$ROOT/z2k_cleanup.sh" \
     && ok "отдельный скрипт удаления тоже снимает службу и цепочки" || bad "z2k_cleanup.sh не знает о службе подмены"
@@ -103,6 +107,147 @@ for root in default "$TMP/custom root"; do
     [ "$got" = "$want" ] && ok "start gvsub передаёт -whitelist: $root" \
         || bad "start gvsub: whitelist '$got', нужен '$want'"
 done
+
+# --- 10. Очередь DNS в mangle OUTPUT и mangle FORWARD (--ctstate ESTABLISHED) --
+{
+    fn z2k_gvsub_enabled
+    fn z2k_gvsub_dns_rule
+    fn z2k_gvsub_legacy_purge
+    fn z2k_gvsub_fw_start
+    fn z2k_gvsub_fw_stop
+} > "$TMP/fw-fns.sh"
+
+cat > "$TMP/mock_ipt.py" <<'PY'
+import json, os, sys
+from pathlib import Path
+fam = sys.argv[1]
+args = sys.argv[2:]
+st_path = Path(os.environ["FW_STATE"])
+log_path = Path(os.environ["FW_CALLS"])
+with log_path.open("a") as lf:
+    lf.write(fam + " " + " ".join(args) + "\n")
+st = json.loads(st_path.read_text()) if st_path.exists() else {}
+if len(args) < 4 or args[0] != "-t":
+    sys.exit(2)
+table, op, chain = args[1], args[2], args[3]
+key = f"{fam}/{table}/{chain}"
+cur = st.get(key, [])
+if op == "-C":
+    spec = " ".join(args[4:])
+    sys.exit(0 if spec in cur else 1)
+if op == "-I":
+    spec = " ".join(args[5:])
+    st[key] = [spec] + cur
+    st_path.write_text(json.dumps(st))
+    sys.exit(0)
+if op == "-D":
+    spec = " ".join(args[4:])
+    if spec not in cur:
+        sys.exit(1)
+    cur.remove(spec)
+    st[key] = cur
+    st_path.write_text(json.dumps(st))
+    sys.exit(0)
+if op in ("-F", "-X"):
+    st.pop(key, None)
+    st_path.write_text(json.dumps(st))
+    sys.exit(0)
+sys.exit(2)
+PY
+
+run_fw_case() (
+    . "$TMP/fw-fns.sh"
+    printf '#!/bin/sh\necho gvsub\n' > "$TMP/gvbin"
+    chmod +x "$TMP/gvbin"
+    Z2K_GVSUB_BIN="$TMP/gvbin"
+    Z2K_GVSUB_QUEUE=210
+    Z2K_GVSUB_CHAIN=Z2K_GVSUB
+    Z2K_GVSUB_PID="$TMP/no.pid"
+    Z2K_GV_SERVER_REPLY2=1
+    FWTYPE=iptables
+    DISABLE_IPV6="$1"
+    FW_STATE="$TMP/fw-$2.json"
+    FW_CALLS="$TMP/fw-$2.calls"
+    MOD_LOG="$TMP/fw-$2.mods"
+    export FW_STATE FW_CALLS
+    rm -f "$FW_STATE" "$FW_CALLS" "$MOD_LOG"
+    [ -z "${3:-}" ] || printf '%s' "$3" > "$FW_STATE"
+    iptablesw()  { python3 "$TMP/mock_ipt.py" iptablesw "$@"; }
+    ip6tablesw() { python3 "$TMP/mock_ipt.py" ip6tablesw "$@"; }
+    z2k_insmod_fw() { printf '%s\n' "$1" >> "$MOD_LOG"; }
+    eval "$4"
+)
+
+# Вызов без $5 совместим со старой сигнатурой (OUTPUT без conntrack), а $5=FORWARD
+# ограничивает выходной интерфейс локальными мостами (-o br+) и проверяет ESTABLISHED.
+OUT_RULE=$(. "$TMP/fw-fns.sh"; Z2K_GVSUB_QUEUE=210; echo_cmd() { printf '%s' "$*"; }; z2k_gvsub_dns_rule echo_cmd -I video)
+FWD_RULE=$(. "$TMP/fw-fns.sh"; Z2K_GVSUB_QUEUE=210; echo_cmd() { printf '%s' "$*"; }; z2k_gvsub_dns_rule echo_cmd -I video current FORWARD)
+[ "$OUT_RULE" = "-t mangle -I OUTPUT 1 ! -o lo -p udp --sport 53 -m string --algo bm --icase --string googlevideo -j NFQUEUE --queue-num 210 --queue-bypass" ] \
+    && ok "z2k_gvsub_dns_rule по умолчанию ставит правило в OUTPUT без conntrack" \
+    || bad "неожиданное правило OUTPUT: '$OUT_RULE'"
+[ "$FWD_RULE" = "-t mangle -I FORWARD 1 -o br+ -p udp --sport 53 -m conntrack --ctstate ESTABLISHED -m string --algo bm --icase --string googlevideo -j NFQUEUE --queue-num 210 --queue-bypass" ] \
+    && ok "z2k_gvsub_dns_rule для FORWARD ограничивает -o br+ и включает -m conntrack --ctstate ESTABLISHED" \
+    || bad "неожиданное правило FORWARD: '$FWD_RULE'"
+
+# Предзаполним устаревшие формы без --icase, проверим старт, идемпотентность
+# повторного старта и полную очистку на стопе.
+SEED='{"iptablesw/mangle/OUTPUT":["! -o lo -p udp --sport 53 -m string --algo bm --string googlevideo -j NFQUEUE --queue-num 210 --queue-bypass"],"iptablesw/mangle/FORWARD":["-o br+ -p udp --sport 53 -m conntrack --ctstate ESTABLISHED -m string --algo bm --string googlevideo -j NFQUEUE --queue-num 210 --queue-bypass"]}'
+run_fw_case 0 dual "$SEED" '
+    z2k_gvsub_fw_start
+    cp "$FW_STATE" "$FW_STATE.after1"
+    : > "$FW_CALLS"
+    z2k_gvsub_fw_start
+    cp "$FW_STATE" "$FW_STATE.after2"
+    cp "$FW_CALLS" "$FW_CALLS.second"
+    z2k_gvsub_fw_stop
+'
+if python3 - "$TMP/fw-dual.json.after1" "$TMP/fw-dual.json.after2" "$TMP/fw-dual.calls.second" "$TMP/fw-dual.json" <<'PYCHECK'
+import json, sys
+from pathlib import Path
+s1 = json.loads(Path(sys.argv[1]).read_text())
+s2 = json.loads(Path(sys.argv[2]).read_text())
+second_calls = Path(sys.argv[3]).read_text().splitlines()
+stopped = json.loads(Path(sys.argv[4]).read_text())
+assert s1 == s2, f"повторный start_fw изменил состояние: {s1} != {s2}"
+assert not any(" -I " in c for c in second_calls), f"повторный start_fw вставлял дубли: {second_calls}"
+assert not any("-t nat -I" in c or "DNAT" in c or "443" in c for c in second_calls), second_calls
+for fam in ("iptablesw", "ip6tablesw"):
+    out_rules = s1.get(f"{fam}/mangle/OUTPUT", [])
+    fwd_rules = s1.get(f"{fam}/mangle/FORWARD", [])
+    assert len(out_rules) == 3, (fam, out_rules)
+    assert len(fwd_rules) == 3, (fam, fwd_rules)
+    assert all(r.startswith("! -o lo ") and "conntrack" not in r and "--icase" in r for r in out_rules), out_rules
+    assert all(r.startswith("-o br+ ") and "! -o lo" not in r and "--sport 53 -m conntrack --ctstate ESTABLISHED -m string" in r and "--icase" in r for r in fwd_rules), fwd_rules
+    assert not stopped.get(f"{fam}/mangle/OUTPUT"), stopped
+    assert not stopped.get(f"{fam}/mangle/FORWARD"), stopped
+PYCHECK
+then
+    ok "start/stop gvsub идемпотентно ведёт OUTPUT и FORWARD в обоих семействах и чистит старые формы"
+else
+    bad "ошибка жизненного цикла правил OUTPUT/FORWARD в start/stop"
+fi
+
+# При DISABLE_IPV6=1 правила ставятся в iptablesw (OUTPUT+FORWARD), а ip6tablesw пропускается;
+# при отсутствии string/conntrack в /proc/net/ip_tables_matches подгружаются xt_string и xt_conntrack.
+run_fw_case 1 v4only "" '
+    grep() { [ "$2" != string ] && [ "$2" != conntrack ]; }
+    z2k_gvsub_fw_start
+'
+if python3 - "$TMP/fw-v4only.json" "$TMP/fw-v4only.mods" <<'PYV4'
+import json, sys
+from pathlib import Path
+s = json.loads(Path(sys.argv[1]).read_text())
+mods = Path(sys.argv[2]).read_text().splitlines()
+assert len(s.get("iptablesw/mangle/OUTPUT", [])) == 3, s
+assert len(s.get("iptablesw/mangle/FORWARD", [])) == 3, s
+assert "ip6tablesw/mangle/OUTPUT" not in s and "ip6tablesw/mangle/FORWARD" not in s, s
+assert "xt_string" in mods and "xt_conntrack" in mods, mods
+PYV4
+then
+    ok "DISABLE_IPV6=1 пропускает ip6tablesw, а start подгружает xt_string и xt_conntrack"
+else
+    bad "DISABLE_IPV6=1 или подгрузка xt_conntrack сработали неверно"
+fi
 
 printf '\nPASSED: %d\nFAILED: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

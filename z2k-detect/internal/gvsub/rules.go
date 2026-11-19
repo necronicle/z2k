@@ -54,26 +54,51 @@ func (r IPTables) bins() []string {
 	return []string{"iptables", "ip6tables"}
 }
 
-// dnsRule — очередь ответов DNS роутера устройствам (те же аргументы, что в
-// S99zapret2, z2k_gvsub_dns_rule).
+// dnsRule — очередь ответов DNS роутера устройствам в mangle OUTPUT (те же
+// аргументы, что в S99zapret2, z2k_gvsub_dns_rule).
 // DNS wire suffix: c.youtube.com, including label lengths and root terminator.
 const cacheDNSHex = "|016307796f757475626503636f6d00|"
 
+var dnsChains = [...]string{"OUTPUT", "FORWARD"}
+
 func (r IPTables) dnsRule(kind string) []string {
+	return r.dnsChainRule("OUTPUT", kind)
+}
+
+func (r IPTables) dnsChainRule(chain, kind string) []string {
 	q := r.Queue
 	if q == "" {
 		q = "210"
 	}
-	// ! -o lo: ответы на собственные запросы службы (имена машин кластера)
-	// идут через lo и придерживаться не должны.
+	// В OUTPUT: ! -o lo исключает ответы на собственные запросы службы через lo.
+	// В FORWARD: -o br+ ограничивает перехват ответами в сегменты LAN (ответы
+	// опубликованного из LAN DNS-сервера внешним клиентам в WAN не совпадают),
+	// а --ctstate ESTABLISHED принимает только ответы открытых изнутри обменов,
+	// так как mangle FORWARD выполняется до межсетевого экрана filter FORWARD.
 	match, value := "--string", "googlevideo"
 	if kind == "cache" {
 		match, value = "--hex-string", cacheDNSHex
 	} else if kind == "gvt1" {
 		match, value = "--hex-string", "|046776743103636f6d00|"
 	}
-	return []string{"!", "-o", "lo", "-p", "udp", "--sport", "53", "-m", "string", "--algo", "bm", "--icase", match, value,
-		"-j", "NFQUEUE", "--queue-num", q, "--queue-bypass"}
+	var args []string
+	if chain == "FORWARD" {
+		args = []string{"-o", "br+", "-p", "udp", "--sport", "53", "-m", "conntrack", "--ctstate", "ESTABLISHED"}
+	} else {
+		args = []string{"!", "-o", "lo", "-p", "udp", "--sport", "53"}
+	}
+	return append(args, "-m", "string", "--algo", "bm", "--icase", match, value,
+		"-j", "NFQUEUE", "--queue-num", q, "--queue-bypass")
+}
+
+func withoutICase(rule []string) []string {
+	out := make([]string, 0, len(rule))
+	for _, arg := range rule {
+		if arg != "--icase" {
+			out = append(out, arg)
+		}
+	}
+	return out
 }
 
 // Old hooks are removed on upgrade/stop; never created again.
@@ -85,12 +110,19 @@ func (r IPTables) Ensure() (bool, error) {
 	recreated := false
 	var firstErr error
 	for _, bin := range r.bins() {
-		for _, kind := range []string{"video", "cache", "gvt1"} {
-			check := append([]string{"-w", "-t", "mangle", "-C", "OUTPUT"}, r.dnsRule(kind)...)
-			if r.run(bin, check...) != nil {
-				ins := append([]string{"-w", "-t", "mangle", "-I", "OUTPUT", "1"}, r.dnsRule(kind)...)
-				if err := r.run(bin, ins...); err != nil && firstErr == nil {
-					firstErr = err
+		for _, chain := range dnsChains {
+			for _, kind := range []string{"video", "cache", "gvt1"} {
+				rule := r.dnsChainRule(chain, kind)
+				check := append([]string{"-w", "-t", "mangle", "-C", chain}, rule...)
+				if r.run(bin, check...) != nil {
+					ins := append([]string{"-w", "-t", "mangle", "-I", chain, "1"}, rule...)
+					if err := r.run(bin, ins...); err != nil {
+						if firstErr == nil {
+							firstErr = err
+						}
+					} else {
+						recreated = true
+					}
 				}
 			}
 		}
@@ -101,17 +133,13 @@ func (r IPTables) Ensure() (bool, error) {
 // Teardown — каркас целиком: очередь DNS, крючки и цепочки.
 func (r IPTables) Teardown() {
 	for _, bin := range r.bins() {
-		for _, kind := range []string{"video", "cache", "gvt1"} {
-			rule := r.dnsRule(kind)
-			legacy := make([]string, 0, len(rule))
-			for _, arg := range rule {
-				if arg != "--icase" {
-					legacy = append(legacy, arg)
-				}
-			}
-			for _, shape := range [][]string{rule, legacy} {
-				del := append([]string{"-w", "-t", "mangle", "-D", "OUTPUT"}, shape...)
-				for i := 0; i < 8 && r.run(bin, del...) == nil; i++ {
+		for _, chain := range dnsChains {
+			for _, kind := range []string{"video", "cache", "gvt1"} {
+				rule := r.dnsChainRule(chain, kind)
+				for _, shape := range [][]string{rule, withoutICase(rule)} {
+					del := append([]string{"-w", "-t", "mangle", "-D", chain}, shape...)
+					for i := 0; i < 8 && r.run(bin, del...) == nil; i++ {
+					}
 				}
 			}
 		}
