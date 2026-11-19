@@ -303,6 +303,222 @@ assert_eq "двоичный DoH, DNS-отказ, обрыв, HTTP и TLS оши�
 )
 assert_eq "DoT: проверка цепочки/имени, ошибка сертификата и старый клиент" 0 "$?"
 
+# ── Разбор nslookup без номера, IPv6 в UDP/DoH/DoT/resolv.conf и валидация панели ──
+_res=$(printf '%s\n' \
+    '45.90.28.0' \
+    '2606:4700:4700::1111' \
+    '::1' \
+    '2620:fe::' \
+    '2001:0db8:85a3:0000:0000:8a2e:0370:7334' \
+    'dot:2606:4700:4700::1111' \
+    'https://[2606:4700:4700::1111]/dns-query' \
+    'https://[2001:db8::1]:8443/dns-query' \
+    | sh -c "DNS_CHECK_OWN=$_ow/v6ok.txt; $_save; dns_check_own_save" 2>/dev/null)
+assert_eq "панель сохраняет валидные IPv4, IPv6, dot:IPv6 и https://[IPv6]" "entries=8 dropped=0" "$_res"
+
+_res=$(printf '%s\n' \
+    '010.1.1.1' \
+    '256.1.1.1' \
+    '1.2.3' \
+    '1.2.3.4.5' \
+    '::' \
+    '2001::db8::1' \
+    '1:2:3:4:5:6::7:8' \
+    '2001:db812::1' \
+    'dot:999.999.999.999' \
+    'dot:example.org-' \
+    'https://' \
+    'https:///dns-query' \
+    'https://2001:db8::1/dns-query' \
+    'https://user@dns.google/dns-query' \
+    'https://dns.google:0/dns-query' \
+    'https://dns.google:65536/dns-query' \
+    'https://dns.google:/dns-query' \
+    'https://[1.1.1.1]/dns-query' \
+    | sh -c "DNS_CHECK_OWN=$_ow/v6bad.txt; $_save; dns_check_own_save" 2>/dev/null)
+assert_eq "панель отбрасывает битые IPv4/IPv6/DoT/DoH" "entries=0 dropped=18" "$_res"
+assert_eq "мусор не попал в dns-check.txt" "0" "$(awk 'END {print NR+0}' "$_ow/v6bad.txt" 2>/dev/null)"
+
+(
+    Z2K_DNS_LIB=1 . "$S"
+    # nslookup без номера (Address: <ip>) и фильтрация заголовка Server/Address и AAAA.
+    nslookup() {
+        printf 'Server:\t\t1.1.1.1\nAddress:\t1.1.1.1:53\n\nNon-authoritative answer:\nName:\ttarget\nAddress: 192.0.2.10\nName:\ttarget\nAddress: 192.0.2.11\nName:\ttarget\nAddress: 2001:db8::10\n'
+    }
+    [ "$(udp_a '[2001:db8::1]' target | tr '\n' ',')" = '192.0.2.10,192.0.2.11,' ] || exit 1
+
+    # Снятие скобок [IPv6] перед dig @... и перед z2k-detect dnsms -server ...
+    dig() { printf '%s\n' "$*" > "$SB/dig-v6"; printf ';; Query time: 17 msec\n'; }
+    [ "$(udp_ms '[2001:db8::1]' example.com)" = 17 ] || exit 1
+    grep -F -q '@2001:db8::1' "$SB/dig-v6" || exit 1
+    if grep -F -q '@[' "$SB/dig-v6"; then exit 1; fi
+
+    mkdir -p "$SB/detdir" "$SB/nodig"
+    ln -s "$(command -v head)" "$SB/nodig/head"
+    ln -s "$(command -v sed)" "$SB/nodig/sed"
+    cat > "$SB/detdir/z2k-detect" <<'DET'
+#!/bin/sh
+printf '%s\n' "$*" > "$DET_OUT"
+printf '23\n'
+DET
+    chmod +x "$SB/detdir/z2k-detect"
+    (
+        unset -f dig
+        # shellcheck disable=SC2123 # намеренно скрываем системный dig в подшелле
+        PATH="$SB/nodig"
+        ZAPRET2_DIR="$SB/detdir"
+        DET_OUT="$SB/dnsms-args"; export DET_OUT
+        ms=$(udp_ms '[2001:db8::53]' example.com)
+        [ "$ms" = 23 ] || exit 1
+    ) || exit 1
+    grep -F -q -- '-server 2001:db8::53' "$SB/dnsms-args" || exit 1
+
+    # current_resolver: IPv6, сохранение зоны %iface, комментарии и пропуск мусора.
+    printf '%s\n' '# comment' 'nameserver :::' 'nameserver 999.999.999.999' 'nameserver fe8::1%eth0' '  nameserver fe80::1%eth0#link-local' 'nameserver 8.8.8.8' > "$SB/resolv1.conf"
+    [ "$(Z2K_DNS_RESOLV_CONF="$SB/resolv1.conf" current_resolver)" = 'fe80::1%eth0' ] || exit 1
+    printf '%s\n' 'nameserver ::1' > "$SB/resolv2.conf"
+    [ "$(Z2K_DNS_RESOLV_CONF="$SB/resolv2.conf" current_resolver)" = '::1' ] || exit 1
+
+    # _resolve_set, doh_wire_a и doh_wire_ms: IPv6, [IPv6]:port и флаг -g у curl.
+    _resolve_set 'https://dns.example/dns-query' '2606:4700:4700::1111'
+    [ "$_RH:$_RP:$_RIP" = 'dns.example:443:[2606:4700:4700::1111]' ] || exit 1
+    _resolve_set 'https://[2001:db8::1]:8443/dns-query' '2001:db8::2'
+    [ "$_RH:$_RP:$_RIP" = '[2001:db8::1]:8443:[2001:db8::2]' ] || exit 1
+    _resolve_set 'https://[2001:db8::1]/dns-query' '2001:db8::2'
+    [ "$_RH:$_RP:$_RIP" = '[2001:db8::1]:443:[2001:db8::2]' ] || exit 1
+    _resolve_set 'https://dns.example/dns-query' '1.2.3.4:53'
+    [ -z "$_RIP" ] || exit 1
+
+    curl() {
+        printf '%s\n' "$*" > "$SB/curl-v6-args"
+        _out=''; _fmt=''
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                -o) shift; _out="$1" ;;
+                -w) shift; _fmt="$1" ;;
+            esac
+            shift
+        done
+        cp "$SB/wire" "$_out"
+        case "$_fmt" in *time_total*) printf '0.031 200' ;; *) printf '200' ;; esac
+        return 0
+    }
+    [ "$(doh_wire_a 'https://[2001:db8::1]:8443/dns-query' example.com '2001:db8::2')" = "$(dns_file_a "$SB/wire")" ] || exit 1
+    grep -E -q '(^| )-g( |$)' "$SB/curl-v6-args" || exit 1
+    grep -F -q -- '--resolve [2001:db8::1]:8443:[2001:db8::2]' "$SB/curl-v6-args" || exit 1
+    [ "$(doh_wire_ms 'https://[2001:db8::1]:8443/dns-query' '2001:db8::2')" = 31 ] || exit 1
+    grep -E -q '(^| )-g( |$)' "$SB/curl-v6-args" || exit 1
+
+    # dot_alive: пустой $1, IPv6, -ign_eof и -CAfile.
+    TIMEOUT=1
+    printf 'CERT\n' > "$SB/ca.pem"
+    : > "$SB/empty-ca.pem"
+    openssl() {
+        if [ "$2" = -help ]; then
+            printf '%s' '-verify_return_error -verify_hostname -verify_ip -servername -ign_eof -CAfile'
+            return 0
+        fi
+        printf '%s\n' "$*" > "$SB/tls-v6-args"
+        cat "$SB/dot-wire"
+    }
+    rc=0; dot_alive '' || rc=$?
+    [ "$rc" = 2 ] || exit 1
+
+    Z2K_DNS_CAFILE="$SB/ca.pem" dot_alive '2606:4700:4700::1111' || exit 1
+    for flag in "-CAfile $SB/ca.pem" '-verify_ip 2606:4700:4700::1111' '-connect [2606:4700:4700::1111]:853'; do
+        grep -F -q -- "$flag" "$SB/tls-v6-args" || exit 1
+    done
+    if grep -F -q -- '-servername' "$SB/tls-v6-args"; then exit 1; fi
+    if grep -F -q -- '-ign_eof' "$SB/tls-v6-args"; then exit 1; fi
+
+    Z2K_DNS_CAFILE="$SB/empty-ca.pem" dot_alive dns.example '2606:4700:4700::1111' || exit 1
+    for flag in '-verify_hostname dns.example' '-servername dns.example' '-connect [2606:4700:4700::1111]:853'; do
+        grep -F -q -- "$flag" "$SB/tls-v6-args" || exit 1
+    done
+    if grep -F -q -- '-CAfile' "$SB/tls-v6-args"; then exit 1; fi
+    if grep -F -q -- '-ign_eof' "$SB/tls-v6-args"; then exit 1; fi
+)
+assert_eq "примитивы IPv6, Address: без номера, -g и -CAfile" 0 "$?"
+
+# main(): ::1 помечается как Резолвер роутера (::1), а IPv6 передаётся в _sip для DoH.
+(
+    Z2K_DNS_LIB=1 . "$S"
+    OUT="$SB/v6main.json"; OWN_LIST="$SB/absent"
+    DEFAULT_SERVERS="Cloudflare|2606:4700:4700::1111|https://cloudflare-dns.com/dns-query|one.one.one.one
+Google|2001:4860:4860::8888|https://dns.google/dns-query|dns.google"
+    TARGETS="rutor.info"; PROXY_TARGETS=""
+    current_resolver() { printf '::1'; }
+    udp_a() { [ "$1" != "$CANARY" ] || return 1; printf '93.184.216.34\n'; }
+    doh_wire_a() { [ "$1" != "https://cloudflare-dns.com/dns-query" ] || printf '%s\n' "$3" > "$SB/v6-sip"; printf '93.184.216.34\n'; }
+    udp_ms() { printf 11; }
+    doh_wire_ms() { printf 22; }
+    dot_alive() { [ "$1" != "one.one.one.one" ] || printf '%s|%s\n' "$1" "$2" > "$SB/v6-dot-sip"; DOT_MS=15; DOT_ADDRESSES=93.184.216.34; return 0; }
+    main >"$SB/v6main.stdout" 2>"$SB/v6main.log"
+)
+python3 - "$SB" <<'PYV6MAIN'
+import json, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+d = json.loads((p / 'v6main.json').read_text())
+cur = next(s for s in d['servers'] if s['current'] == 1)
+assert cur['name'] == 'Резолвер роутера (::1)' and cur['udp'] == 'works', cur
+assert (p / 'v6-sip').read_text().strip() == '2606:4700:4700::1111'
+assert (p / 'v6-dot-sip').read_text().strip() == 'one.one.one.one|2606:4700:4700::1111'
+PYV6MAIN
+assert_eq "main помечает ::1 резолвером роутера и передаёт IPv6 в _sip" 0 "$?"
+
+# Сквозная цепочка link-local IPv6: от nameserver fe80::1%eth0 в resolv.conf до фактического вызова DNS-клиентов.
+(
+    Z2K_DNS_LIB=1 . "$S"
+    printf 'nameserver fe80::1%%eth0\n' > "$SB/resolv-ll.conf"
+    Z2K_DNS_RESOLV_CONF="$SB/resolv-ll.conf"
+    OUT="$SB/llmain.json"; OWN_LIST="$SB/absent"
+    DEFAULT_SERVERS="Cloudflare|1.1.1.1|https://cloudflare-dns.com/dns-query|
+Google|8.8.8.8|https://dns.google/dns-query|"
+    TARGETS="rutor.info"; PROXY_TARGETS=""
+    : > "$SB/ll-nslookup.log"; : > "$SB/ll-dig.log"
+    nslookup() {
+        printf '%s|%s\n' "$1" "$2" >> "$SB/ll-nslookup.log"
+        [ "$2" != "$CANARY" ] || return 1
+        printf 'Server:\t\t%s\nAddress:\t%s#53\n\nName:\t%s\nAddress: 93.184.216.34\n' "$2" "$2" "$1"
+    }
+    dig() {
+        printf '%s\n' "$*" >> "$SB/ll-dig.log"
+        printf ';; Query time: 14 msec\n'
+    }
+    doh_wire_a() { printf '93.184.216.34\n'; }
+    doh_wire_ms() { printf 20; }
+    main >"$SB/llmain.stdout" 2>"$SB/llmain.log"
+
+    # Запасной путь без dig: z2k-detect dnsms также получает fe80::1%eth0 целиком.
+    (
+        unset -f dig
+        # shellcheck disable=SC2123 # намеренно скрываем системный dig в подшелле
+        PATH="$SB/nodig"
+        ZAPRET2_DIR="$SB/detdir"
+        DET_OUT="$SB/ll-dnsms.log"; export DET_OUT
+        [ "$(udp_ms "$(current_resolver)" example.com)" = 23 ] || exit 1
+    ) || exit 1
+)
+python3 - "$SB" <<'PYLLMAIN'
+import json, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+d = json.loads((p / 'llmain.json').read_text())
+cur = next(s for s in d['servers'] if s['current'] == 1)
+assert cur['name'] == 'Ваш DNS (fe80::1%eth0)', cur
+assert cur['udp'] == 'works' and cur['udp_ms'] == 14, cur
+ns_calls = (p / 'll-nslookup.log').read_text().splitlines()
+assert 'rutor.info|fe80::1%eth0' in ns_calls, ns_calls
+assert 'example.com|fe80::1%eth0' in ns_calls, ns_calls
+assert not any(c.endswith('|fe80::1') for c in ns_calls), ns_calls
+dig_calls = (p / 'll-dig.log').read_text().splitlines()
+assert any('@fe80::1%eth0 ' in c for c in dig_calls), dig_calls
+dnsms_call = (p / 'll-dnsms.log').read_text().strip()
+assert '-server fe80::1%eth0 ' in dnsms_call, dnsms_call
+PYLLMAIN
+assert_eq "сквозная цепочка сохраняет fe80::1%eth0 до вызова DNS-клиента" 0 "$?"
+
 # Текстовая сводка читает тот же JSON и не прячет состояния отдельных путей.
 _snapshot=$(sed -n '/^print_dns_check_snapshot()/,/^}/p' "$ROOT/files/z2k-diag.sh")
 _text=$(Z2K_DIAG_DNS_CHECK_JSON="$SB/owner.json" dash -c "$_snapshot; print_dns_check_snapshot")
