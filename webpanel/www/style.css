@@ -1304,7 +1304,8 @@ body[data-page="login"] #app { max-width: none; }
   color: var(--text-muted);
   transition: transform var(--dur-micro) var(--ease-emphasized);
 }
-.sg-closed .sg-toggle .icon { transform: rotate(-90deg); }
+.sg-closed .sg-toggle .icon,
+.ug-closed .sg-toggle .icon { transform: rotate(-90deg); }
 .sg-name { font-weight: 600; }
 /* Число записей, а не имён: v4 и v6 одного хоста — две записи с разными
    стратегиями, и сводка справа считает именно их. */
@@ -1343,6 +1344,112 @@ body[data-page="login"] #app { max-width: none; }
               calc(var(--space-12) + 7px) 0 / 1px 100%;
 }
 .sg-parent { color: var(--text-muted); }
+
+/* ГРУППЫ ДОМЕНОВ ЧЕЛОВЕКА — уровнем выше автогрупп. Заголовок — та же строка,
+   что у автогруппы (sg-head), плюс акцентная черта слева: два уровня
+   сворачивания на одном экране обязаны различаться с первого взгляда, иначе
+   свёрнутая группа «Discord» читается как ещё один домен.
+   Блоки группы — соседние tbody с меткой data-ug-of (tbody в tbody HTML не
+   вкладывает). Скрытие — по атрибуту, а не по hidden: на телефоне
+   `.state-table tbody { display: block }` перебил бы hidden у блока, и
+   свёрнутая группа показывала бы всё содержимое. Селектор специфичнее
+   мобильного правила, поэтому выигрывает и там. */
+.state-table tbody[data-ug-closed] { display: none; }
+.state-table tr.ug-head td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.state-table tr.ug-head .sg-name { font-size: 15px; }
+/* Вложенность — тем же приёмом, что у автогрупп: отступ плюс направляющая
+   фоном по оси стрелки заголовка. Фон, а не ::before: псевдоэлемент ячейки на
+   телефоне занят подписью поля. */
+.state-table tbody[data-ug-of] td.state-host,
+.state-table tbody[data-ug-of] td.sg-title {
+  padding-left: calc(var(--space-12) + 22px + var(--space-16));
+  background: linear-gradient(var(--border), var(--border)) no-repeat
+              calc(var(--space-12) + 7px) 0 / 1px 100%;
+}
+.state-table tbody[data-ug-of] td.sg-title { padding-left: calc(var(--space-12) + var(--space-16) + 6px); }
+.state-table tbody[data-ug-of] td.sg-leaf {
+  padding-left: calc(var(--space-12) + 22px + 2 * var(--space-16));
+  background:
+    linear-gradient(var(--border), var(--border)) no-repeat calc(var(--space-12) + 7px) 0 / 1px 100%,
+    linear-gradient(var(--border), var(--border)) no-repeat calc(var(--space-12) + 7px + var(--space-16) + 6px) 0 / 1px 100%;
+}
+/* Кнопки в ячейке домена: «в группу» у строк без группы, «изменить» в
+   заголовке группы. Приглушены, пока строку не трогают: на сотне строк сто
+   ярких значков перекрикивали бы сами имена. На сенсорном экране наведения
+   нет, и там они видны всегда. */
+.ug-assign, .ug-edit {
+  margin-left: 6px;
+  padding: 2px 4px;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  vertical-align: middle;
+  border-radius: 4px;
+}
+.ug-assign { opacity: 0.55; }
+.state-table tr:hover .ug-assign, .ug-assign:focus-visible { opacity: 1; }
+.ug-assign:hover, .ug-edit:hover { color: var(--accent); background: var(--bg-subtle); }
+.ug-assign:focus-visible, .ug-edit:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (hover: none) { .ug-assign { opacity: 1; } }
+
+/* Отметка сайтов галочками для переноса в группу. */
+.ug-pick {
+  margin: 0 8px 0 0;
+  width: 15px;
+  height: 15px;
+  vertical-align: middle;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.ug-selbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+  margin: 0 0 var(--space-12);
+  padding: var(--space-8) var(--space-12);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg-subtle);
+}
+.ug-selbar .btn-row { margin: 0; }
+.ug-selbar-count { font-weight: 500; }
+.ug-assign-list {
+  width: 100%;
+  min-height: 72px;
+  max-height: 220px;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* Карточка «Группы доменов». */
+.ug-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 var(--space-12);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.ug-list li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.ug-list li:last-child { border-bottom: 0; }
+.ug-list-name { font-weight: 600; overflow-wrap: anywhere; }
+.ug-list-meta { flex: 1 1 auto; color: var(--text-muted); font-size: 13px; }
+.ug-list-actions { display: flex; gap: var(--space-8); }
+.ug-editor input[type="text"] { width: 100%; max-width: 420px; }
+.ug-assign-modal .field { margin-bottom: var(--space-12); }
+.ug-assign-modal .field input, .ug-assign-modal .field select { width: 100%; }
+.ug-assign-modal .desc { margin: -6px 0 var(--space-12); }
 
 /* ---------- STATUS GRID ---------- */
 .status-grid {
@@ -2602,6 +2709,24 @@ body[data-page="strategies"] #app { max-width: none; }
   .state-table tr.sg-member { margin-left: var(--space-16); }
   .state-table.sg-any td.state-host,
   .state-table.sg-any td.sg-leaf { padding-left: 0; background: none; }
+  /* Группа человека на телефоне: заголовок — карточка с акцентной кромкой,
+     её блоки сдвинуты на шаг. Отступы колонки «Домен» с десктопа здесь не
+     нужны — у карточки нет колонки, к которой выравниваться. */
+  .state-table tr.ug-head { border-left: 3px solid var(--accent); }
+  .state-table tr.ug-head td:first-child { box-shadow: none; }
+  .state-table tbody[data-ug-of] tr { margin-left: var(--space-12); }
+  .state-table tbody[data-ug-of] tr.sg-member { margin-left: calc(var(--space-12) + var(--space-16)); }
+  .state-table tbody[data-ug-of] td.state-host,
+  .state-table tbody[data-ug-of] td.sg-title,
+  .state-table tbody[data-ug-of] td.sg-leaf { padding-left: 0; background: none; }
+  .ug-list-actions { width: 100%; }
+  /* С галочкой в поле «Домен» четыре элемента вместо двух, и разнос по краям
+     (space-between карточки) раскидывал их по всей ширине: галочка у подписи,
+     имя посередине, значок папки переезжал на следующую строку. Здесь поле
+     читается как одна фраза слева направо. */
+  .state-table td.state-host:has(.ug-pick) { justify-content: flex-start; column-gap: 6px; }
+  .state-table td.state-host:has(.ug-pick)::before { margin-right: 4px; }
+  .ug-pick { margin: 0; }
 }
 
 /* Small phone (≤374px) — ещё компактнее на старых iPhone SE.
@@ -2982,14 +3107,16 @@ input[type="checkbox"] { accent-color: var(--accent); }
   .wl-selection [role="status"] { flex-basis: 100%; margin-left: 0; }
   .wl-bulk-list .wl-row { min-height: 36px; }
 }
-.wl-search input, .wl-editor textarea {
+/* Поле списка в окне «Добавить в группу» — того же вида: у textarea нет
+   оформления по умолчанию, и в тёмной теме оно выходило белым пятном. */
+.wl-search input, .wl-editor textarea, textarea.ug-assign-list {
   background: var(--bg); color: var(--text); border: 1px solid var(--border);
   border-radius: 6px; padding: 10px 12px;
 }
 .wl-search input { font-family: inherit; font-size: 14px; line-height: normal; min-height: 0; padding: 8px 12px; }
-.wl-search input:focus-visible, .wl-editor textarea:focus-visible {
+.wl-search input:focus-visible, .wl-editor textarea:focus-visible, textarea.ug-assign-list:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
 @media (max-width: 600px) {
-  .wl-search input, .wl-editor textarea { font-size: 16px; }
+  .wl-search input, .wl-editor textarea, textarea.ug-assign-list { font-size: 16px; }
 }

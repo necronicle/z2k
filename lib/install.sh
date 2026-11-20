@@ -1464,7 +1464,7 @@ step_build_zapret2() {
             local _item
             for _item in config lists/whitelist.txt lists/extra-domains.txt \
                          lists/custom-strategies lists/warp \
-                         lists/autohostlist-domains.txt \
+                         lists/autohostlist-domains.txt lists/domain-groups.txt \
                          ipset/zapret-hosts-user-exclude.txt \
                          webpanel/port webpanel/bind webpanel/bind6 \
                          extra_strats/cache/autocircular/state.tsv .z2k-relay-id; do
@@ -1645,6 +1645,17 @@ step_build_zapret2() {
             [ -f "$ZAPRET2_DIR/lists/${_acc}.txt" ] || continue
             cp -f "$ZAPRET2_DIR/lists/${_acc}.txt" "$backup_tmp/${_acc}.txt" || \
                 die "Не удалось сохранить ${_acc}.txt в бэкап — установка прервана, чтобы не потерять найденные автоматически домены."
+        done
+        # Группы доменов панели (вкладка «Автоподбор») — разметка, которую
+        # человек делает руками; восстановить её неоткуда. На обход не влияет,
+        # но потерять её при переустановке — ровно «настройки не пережили
+        # обновление», поэтому сбой копирования прерывает установку, как у
+        # остальных пользовательских списков.
+        # shellcheck disable=SC2043
+        for _grp in domain-groups; do
+            [ -f "$ZAPRET2_DIR/lists/${_grp}.txt" ] || continue
+            cp -f "$ZAPRET2_DIR/lists/${_grp}.txt" "$backup_tmp/${_grp}.txt" || \
+                die "Не удалось сохранить ${_grp}.txt в бэкап — установка прервана, чтобы не потерять ваши группы доменов."
         done
         # Autocircular state (найденные рабочие стратегии) — recoverable
         # (autocircular переподберёт стратегии заново), поэтому НЕ fatal:
@@ -2624,6 +2635,17 @@ TMPJUNK
             # хотя бы до перезагрузки, и называем реальный путь.
             cp -f "$backup_tmp/${_acc}.txt" "/tmp/z2k-${_acc}.txt" 2>/dev/null
             print_warning "Не удалось восстановить ${_acc}.txt — копия в /tmp/z2k-${_acc}.txt (до перезагрузки)"
+        fi
+    done
+    # shellcheck disable=SC2043
+    for _grp in domain-groups; do
+        [ -f "$backup_tmp/${_grp}.txt" ] || continue
+        if cp -f "$backup_tmp/${_grp}.txt" "${ZAPRET2_DIR}/lists/${_grp}.txt" 2>/dev/null; then
+            chmod 644 "${ZAPRET2_DIR}/lists/${_grp}.txt" 2>/dev/null || true
+            print_info "Восстановлены группы доменов ($(grep -c '^\[' "${ZAPRET2_DIR}/lists/${_grp}.txt" 2>/dev/null || echo 0) шт.)"
+        else
+            cp -f "$backup_tmp/${_grp}.txt" "/tmp/z2k-${_grp}.txt" 2>/dev/null
+            print_warning "Не удалось восстановить ${_grp}.txt — копия в /tmp/z2k-${_grp}.txt (до перезагрузки)"
         fi
     done
     # NB: shipped-снимка игровых списков нет — z2k-update-lists.sh тянет их

@@ -12,6 +12,13 @@ INIT_SCRIPT="${INIT_SCRIPT:-/opt/etc/init.d/S99zapret2}"
 CONFIG_FILE="${CONFIG_FILE:-$ZAPRET2_DIR/config}"
 WHITELIST_FILE="${WHITELIST_FILE:-$LISTS_DIR/whitelist.txt}"
 EXTRA_DOMAINS_FILE="${EXTRA_DOMAINS_FILE:-$LISTS_DIR/extra-domains.txt}"
+# Группы доменов вкладки «Автоподбор». Только вид: этот файл не читает ни
+# nfqws2, ни Lua, ни генератор конфига, и на обход он не влияет никак. Лежит на
+# роутере, а не в localStorage, потому что группы — это разметка, которую
+# человек делает руками, и она обязана быть одной и той же на телефоне и на
+# компьютере. Safari к тому же стирает хранилище сайта, на который неделю не
+# заходили, — а в панель роутера неделями и не заходят.
+DOMAIN_GROUPS_FILE="${DOMAIN_GROUPS_FILE:-$LISTS_DIR/domain-groups.txt}"
 WARP_SCRIPT="${WARP_SCRIPT:-$ZAPRET2_DIR/z2k-warp.sh}"
 WARP_LISTS_DIR="${WARP_LISTS_DIR:-$LISTS_DIR/warp}"
 # Списки в $WARP_LISTS_DIR — целиком пользовательские, их не трогает никто, кроме
@@ -3772,6 +3779,100 @@ extra_domains_import() { domain_list_save "$EXTRA_DOMAINS_FILE" "$1" 2; }
 # Undo restores the user's previous contents, including covered records. Coverage
 # is a UI redundancy check, not input validation: syntax, size and CAS still apply.
 extra_domains_restore() { domain_list_save "$EXTRA_DOMAINS_FILE" "$1" 0; }
+
+# ГРУППЫ ДОМЕНОВ. Формат — секции, как в INI, по домену на строку:
+#
+#   [Discord]
+#   discord.com
+#   discord.media
+#
+# Домен покрывает свои поддомены — так же, как в доменных списках Keenetic,
+# которые человек ведёт рядом, и так же, как в hostlist движка. Иначе пришлось
+# бы перечислять finland10000…finland10100.discord.media по одному.
+#
+# Сохранение — тот же compare-and-swap, что у списков: правка из устаревшей
+# вкладки (телефон, открытый вчера) не должна молча затереть то, что сделано с
+# компьютера сегодня. Ради этого группы и лежат на роутере.
+#
+# Отказываем ЦЕЛИКОМ на первой ошибке и называем строку. Частичное сохранение
+# здесь хуже отказа: файл — единственное место, где разметка существует, а
+# панель показывает его же текст обратно в редакторе.
+#
+# Один домен — одна группа. Две группы с одним доменом дали бы строку таблицы,
+# которая принадлежит обеим, а показать её можно только в одной; молча выбрать
+# за человека — ровно тот случай, когда потом «не туда делось».
+#
+# Имя группы — единственный в панели ввод, который пишет человек, а не трафик.
+# Управляющие символы и квадратные скобки запрещены: первые ломают JSON и
+# строку файла, вторые — сам формат заголовка. Остальное (кириллица, пробелы,
+# эмодзи) разрешено, экранирует его отрисовка. Потолок — в БАЙТАХ: ${#var} и
+# length() в awk под LC_ALL=C считают байты, и 96 байт — это 48 кириллических
+# букв или 96 латинских.
+DOMAIN_GROUPS_MAX_BYTES=262144
+DOMAIN_GROUPS_NAME_MAX=96
+
+domain_groups_revision() { domain_list_revision "$DOMAIN_GROUPS_FILE"; }
+
+domain_groups_save() (
+    target="$DOMAIN_GROUPS_FILE"
+    expected="$1"
+    case "$expected" in ''|*[!a-f0-9]*) echo 'Неизвестная версия групп. Обновите страницу.' >&2; exit 2 ;; esac
+    [ "${#expected}" = 64 ] || exit 2
+    mkdir -p "$(dirname "$target")" || exit 1
+    raw=$(mktemp "$target.raw.XXXXXX") || exit 1
+    tmp=$(mktemp "$target.edit.XXXXXX") || { rm -f "$raw"; exit 1; }
+    locked=0
+    trap 'rm -f "$raw" "$tmp"; [ "$locked" = 0 ] || _list_unlock "$target"' EXIT
+    head -c $((DOMAIN_GROUPS_MAX_BYTES + 1)) > "$raw" || exit 1
+    [ "$(wc -c < "$raw")" -le "$DOMAIN_GROUPS_MAX_BYTES" ] || { echo 'Группы занимают больше 256 КБ.' >&2; exit 2; }
+    LC_ALL=C awk -v maxname="$DOMAIN_GROUPS_NAME_MAX" '
+        function fail(msg) { if (!bad) print msg > "/dev/stderr"; bad = 1; exit }
+        {
+            sub(/\r$/, ""); line = $0
+            sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "")
+            if ($0 == "") { print ""; next }
+            if (substr($0, 1, 1) == "#") { print line; next }
+            if (substr($0, 1, 1) == "[") {
+                if (substr($0, length($0), 1) != "]")
+                    fail(sprintf("Строка %d: имя группы пишется в квадратных скобках, например [Discord].", NR))
+                name = substr($0, 2, length($0) - 2)
+                sub(/^[ \t]+/, "", name); sub(/[ \t]+$/, "", name)
+                if (name == "") fail(sprintf("Строка %d: у группы нет имени.", NR))
+                if (length(name) > maxname) fail(sprintf("Строка %d: имя группы длиннее %d байт.", NR, maxname))
+                if (index(name, "[") || index(name, "]") || name ~ /[[:cntrl:]]/)
+                    fail(sprintf("Строка %d: в имени группы нельзя использовать квадратные скобки и управляющие символы.", NR))
+                # tolower под LC_ALL=C сворачивает только латиницу. Кириллические
+                # двойники с разным регистром ловит панель до отправки; здесь —
+                # последняя линия для правки руками.
+                key = tolower(name)
+                if (key in names) fail(sprintf("Строка %d: группа «%s» уже есть в строке %d.", NR, name, names[key]))
+                names[key] = NR; cur = name
+                print "[" name "]"; next
+            }
+            if (cur == "") fail(sprintf("Строка %d: домен стоит до первой группы. Начните с имени группы, например [Discord].", NR))
+            d = tolower($0); valid = 1
+            if (length(d) > 253 || d !~ /^[a-z0-9.-]+$/ || d ~ /^[0-9.]+$/) valid = 0
+            n = split(d, labels, ".")
+            for (i = 1; i <= n; i++) if (length(labels[i]) < 1 || length(labels[i]) > 63 || labels[i] ~ /^-/ || labels[i] ~ /-$/) valid = 0
+            if (!valid) fail(sprintf("Строка %d: некорректный домен. Укажите имя сайта без адреса, протокола и пути.", NR))
+            if (d in owner) {
+                if (owner[d] == cur) next
+                fail(sprintf("Строка %d: домен %s уже входит в группу «%s».", NR, d, owner[d]))
+            }
+            owner[d] = cur; print d
+        }
+        END { exit bad ? 2 : 0 }
+    ' "$raw" > "$tmp" || exit 2
+    _list_lock "$target" || { echo 'Группы сейчас сохраняются из другой вкладки. Повторите.' >&2; exit 1; }
+    locked=1
+    current=$(domain_list_revision "$target")
+    [ "$current" = "$expected" ] || {
+        echo 'Группы уже изменены на другом устройстве или в другой вкладке. Обновите страницу и повторите правку.' >&2
+        exit 3
+    }
+    chmod 644 "$tmp" && mv -f "$tmp" "$target" || { echo 'Не удалось сохранить группы.' >&2; exit 1; }
+    domain_list_revision "$target"
+)
 
 # Check only newly added records; retaining/removing an existing record remains
 # possible after other lists have changed. Read each large catalogue once, not
