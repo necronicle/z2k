@@ -1,9 +1,10 @@
 import { openSortSheet } from "../chrome.js";
-import { apiGet, apiPost, apiPostText, errHtml, toastErr } from "../core/api.js";
+import { apiGet, apiPost, apiPostText, errHtml, errMsg, toastErr } from "../core/api.js";
 import { $app, _icons, escapeHtml, skeletonLines } from "../core/dom.js";
 import { _newLoad, _stale } from "../core/loadorder.js";
 import { toast } from "../core/toast.js";
 import { STATE_SORT_LABELS, buildStateBlocks, stateAge, groupDomain, saveOpenGroups, saveStateSort, setStatePools, stateOpenGroups, statePools, stateSort } from "../state-model.js";
+import { domainGroupIndex, domainGroupProblem, domainGroupSections, domainGroupsTextProblem, domainGroupsAdd, domainGroupsAppend, domainGroupsReplace, matchDomainGroup, saveOpenUgroups, stateOpenUgroups } from "../state-model.js";
 
 // Разделитель СОСТАВНОГО ключа группы («пул<sep>домен»).
 //
@@ -100,6 +101,17 @@ export async function renderState() {
       </p>
       <div class="btn-row" id="discord-voice-controls">${skeletonLines(1)}</div>
     </details>
+    <details class="card state-voice state-ugroups" id="ug-card">
+      <summary>Группы доменов <span id="ug-status">Загрузка…</span></summary>
+      <p class="desc">
+        Группа собирает под одним именем домены одного сайта, приложения или
+        сервиса — в таблице ниже они идут одним сворачиваемым блоком, даже
+        если это разные домены и разные пулы. Домен включает свои поддомены.
+        Группы хранятся на роутере, поэтому одинаковы на телефоне и на
+        компьютере. На обход они не влияют: это только порядок в таблице.
+      </p>
+      <div id="ug-body">${skeletonLines(2)}</div>
+    </details>
     <div class="card">
       <h3>Стратегии по доменам</h3>
       <details class="state-help"><summary>Как управлять?</summary>
@@ -115,7 +127,16 @@ export async function renderState() {
             перестанет меняться; нажмите закрытый замок — разморозить;</li>
         <li><b>× слева</b> — удалить запись (старт с первой стратегии);</li>
         <li><b>домен со стрелкой</b> — записи его поддоменов собраны вместе;
-            нажмите, чтобы раскрыть или свернуть.</li>
+            нажмите, чтобы раскрыть или свернуть;</li>
+        <li><b>галочка у домена</b> — отметить для группы: у строки — именно
+            это имя, у заголовка автогруппы — домен со всеми поддоменами.
+            Отмеченное (можно набирать через несколько поисков, «Отметить
+            найденные» берёт всю выдачу) переносится в группу кнопкой
+            «В группу…» над таблицей;</li>
+        <li><b>значок папки</b> — добавить домен в свою группу. Группы собирают
+            разные домены одного сервиса под одним именем (discord.com,
+            discord.media, discordapp.net — в «Discord»). Группы хранятся на
+            роутере и одинаковы на всех устройствах; на обход они не влияют.</li>
       </ul>
       <p class="desc">
         «Заморозить все» закрепляет каждую запись на её текущей стратегии.
@@ -143,6 +164,7 @@ export async function renderState() {
           <button class="btn btn-danger" id="state-clear-all">Удалить все записи</button>
         </div>
       </div>
+      <div class="ug-selbar" id="ug-selbar" role="region" aria-label="Отмеченные домены" hidden></div>
       <div id="state-body">${skeletonLines(6)}</div>
     </div>
   `);
@@ -221,10 +243,50 @@ function hiddenStrategyPool(key) {
   return key === "udp_misc" || /^circular_[0-9]+_[0-9]+$/.test(String(key || ""));
 }
 
+// Группы доменов, как их отдал роутер: текст файла, его версия для
+// compare-and-swap и разбор. null — ещё не пришли или сервер их не знает
+// (панель новее роутера); тогда таблица рисуется ровно как без групп.
+let ugView = null;
+let ugError = "";
+let ugBusy = false;
+// Открытый редактор: { mode: "new" | "group" | "text", index }.
+let ugEdit = null;
+// Домены, отмеченные галочками в таблице: у строки — её имя, у заголовка
+// автогруппы — домен целиком. Отметка по имени, а не по строке: v4 и v6 одного
+// хоста, тот же хост в другом пуле отмечаются вместе. Живёт, пока открыта страница,
+// и переживает поиск: «нашёл discord — отметил, нашёл twitch — отметил,
+// отправил всё в одну группу» — ровно тот сценарий, ради которого отметки.
+let ugPicked = new Set();
+// Родители строк без группы в текущей выдаче — для «Отметить найденные».
+let ugPickable = [];
+// Поколение групп. Растёт в начале и в конце каждой записи. Загрузка таблицы,
+// начатая до записи или во время неё, приносит прежний текст групп — /state на
+// роутере идёт секунды, и такой ответ приходит ПОСЛЕ свежего. Применять его
+// нельзя: только что созданная группа пропадала с экрана, а следующая правка
+// получала ложный отказ «изменено на другом устройстве» по устаревшей версии.
+let ugGen = 0;
+
+function setUgView(text, revision) {
+  const t = text ? String(text) + (String(text).endsWith("\n") ? "" : "\n") : "";
+  const { sections } = domainGroupSections(t);
+  ugView = { text: t, revision: String(revision || ""), sections, index: domainGroupIndex(sections) };
+  ugError = "";
+}
+
+// Номер группы для записи или -1. Без загруженных групп — всегда -1, и это не
+// заглушка: поиск и «Заморозить все» обязаны работать и до прихода групп.
+function entryUg(e) { return ugView ? matchDomainGroup(ugView.index, e.host) : -1; }
+
 function visibleStateEntries(entries = stateCache || []) {
   const query = (document.getElementById("state-search")?.value || "").trim().toLowerCase();
-  return entries.filter(e => !hiddenStrategyPool(e.key) && e.host !== "nohost" &&
-    String(e.host || "").replace(/\|[46]$/, "").toLowerCase().includes(query));
+  // Поиск видит и имя группы: «дискорд» находит всё, что человек сам туда
+  // сложил, хотя ни один домен так не называется. Ради этого группы и заводят.
+  return entries.filter(e => {
+    if (hiddenStrategyPool(e.key) || e.host === "nohost") return false;
+    if (String(e.host || "").replace(/\|[46]$/, "").toLowerCase().includes(query)) return true;
+    const ug = query ? entryUg(e) : -1;
+    return ug >= 0 && ugView.sections[ug].name.toLowerCase().includes(query);
+  });
 }
 
 function updateVisibleFreezeButton() {
@@ -336,9 +398,13 @@ async function loadState(useCache) {
       const signal = _stateAbort ? _stateAbort.signal : undefined;
       // /pools may fail if nfqws2 isn't running — tolerate it (dropdowns then
       // fall back to the row's own strategy as the max).
-      const [d, poolsResp] = await Promise.all([
+      // Группы — третьим запросом и тоже без права уронить таблицу: роутер
+      // старше панели их не знает, и это не повод не показывать стратегии.
+      const gen = ugGen;
+      const [d, poolsResp, groupsResp] = await Promise.all([
         apiGet("/state", { signal }),
         apiGet("/pools", { signal }).catch(() => ({ pools: {} })),
+        apiGet("/domain-groups", { signal }).catch(e => ({ __error: e })),
       ]);
       // Ответ более старого вызова, обогнавший свежий, не должен ни
       // рисовать таблицу, ни отравлять stateCache: иначе только что
@@ -348,6 +414,15 @@ async function loadState(useCache) {
       setStatePools(Object.fromEntries(Object.entries((poolsResp && poolsResp.pools) || {})
         .filter(([key]) => !hiddenStrategyPool(key))));
       entries = (d.entries || []).filter(e => !hiddenStrategyPool(e.key));
+      if (gen !== ugGen) {
+        // Ответ про группы старше записи, прошедшей за время загрузки.
+      } else if (groupsResp && !groupsResp.__error && typeof groupsResp.text === "string") {
+        // Пока открыт редактор, разбор не подменяем: его поля посчитаны от
+        // версии, с которой человек начал, а сохранение сверит её с роутером.
+        if (!ugEdit) setUgView(groupsResp.text, groupsResp.revision);
+      } else if (!ugView) {
+        ugError = errMsg(groupsResp && groupsResp.__error);
+      }
       // Гонку закрывает метка _stale несколькими строками выше: ответ,
       // обогнанный более свежим, до этого места не доходит. Линтер видит
       // «запись после await», но гейта не видит.
@@ -364,6 +439,9 @@ async function loadState(useCache) {
     // терпимо: по колонке кликают редко и осознанно. Поиск дёргает
     // перерисовку на КАЖДУЮ букву, то есть стирал бы выбор сразу.
     if (!useCache) renderDiscordVoicePanel(entries);
+    // Карточка групп — по той же причине только на сетевой загрузке: в ней
+    // может быть открыт редактор с ненабранным текстом.
+    if (!useCache) renderUgManager();
 
     // Записи с host="nohost" — это пулы без домена, и единственный такой пул,
     // discord_udp, уже показан карточкой выше со своим селектором и заморозкой.
@@ -394,6 +472,8 @@ async function loadState(useCache) {
     if (!all.length) {
       if (counter) counter.textContent = "Записей: 0";
       body.innerHTML = `<p style="color:var(--text-muted)">пока пусто — ни одна стратегия ещё не закреплена</p>`;
+      ugPickable = [];
+      renderUgSelbar();
       return;
     }
 
@@ -420,6 +500,11 @@ async function loadState(useCache) {
 
     if (!visible.length) {
       body.innerHTML = `<p style="color:var(--text-muted)">Ничего не найдено. Измените поисковый запрос.</p>`;
+      // Панель отмеченного живёт снаружи таблицы. Без этого на пустой выдаче
+      // оставалась «Отметить найденные» от предыдущей буквы — и отмечала то,
+      // чего на экране уже нет.
+      ugPickable = [];
+      renderUgSelbar();
       return;
     }
     const nowSec = Math.floor(Date.now() / 1000);
@@ -435,10 +520,25 @@ async function loadState(useCache) {
     const meta = new Map(visible.map(e => {
       const hf = splitFamily(e.host);
       const dom = groupDomain(hf.name);
-      return [e, { name: hf.name, fam: hf.fam, group: dom,
+      return [e, { name: hf.name, fam: hf.fam, group: dom, ug: entryUg(e),
                    gkey: String(e.key || "") + GKEY_SEP + dom, age: stateAge(e.ts, nowSec) }];
     }));
-    const blocks = buildStateBlocks(visible, meta);
+    // ГРУППЫ ЧЕЛОВЕКА — УРОВНЕМ ВЫШЕ АВТОГРУПП. Строки раскладываются по
+    // группам, и внутри каждой работает прежняя сборка: поддомены под
+    // родителем, пул отдельно, выбранная сортировка. Сами группы стоят в том
+    // порядке, в каком их завели, и выше строк без группы: порядок групп —
+    // решение человека, и колонка сортировки его не переставляет.
+    const ugParts = ugView ? ugView.sections.map(() => []) : [];
+    const ungrouped = [];
+    for (const e of visible) {
+      const ug = meta.get(e).ug;
+      (ug >= 0 ? ugParts[ug] : ungrouped).push(e);
+    }
+    const blocks = buildStateBlocks(ungrouped, meta);
+    // «Отметить найденные» берёт то же, что дала бы ручная отметка: у
+    // автогруппы — весь домен (её заголовок), у одиночной строки — её имя.
+    ugPickable = Array.from(new Set(blocks.flatMap(b => b.names.size >= 2 ? [b.group] : Array.from(b.names))
+      .filter(n => n.indexOf(":") < 0 && !/^[0-9.]+$/.test(n))));
 
     const fmtAge = (age) => age === null ? "—" : age < 60 ? age + "с" :
                             age < 3600 ? Math.floor(age / 60) + "м" :
@@ -479,7 +579,7 @@ async function loadState(useCache) {
                     data-host="${escapeHtml(e.host)}">${_icons.close}</button>
           </td>
           <td data-label="Профиль">${escapeHtml(e.key)}</td>
-          <td data-label="Домен" class="state-host${inGroup ? " sg-leaf" : ""}">${nameHtml}${m.fam ? ` <span class="fam-tag">${m.fam}</span>` : ""}</td>
+          <td data-label="Домен" class="state-host${inGroup ? " sg-leaf" : ""}">${m.ug < 0 ? pickHtml(m.name) : ""}${nameHtml}${m.fam ? ` <span class="fam-tag">${m.fam}</span>` : ""}${m.ug < 0 ? assignHtml(m.name) : ""}</td>
           <td data-label="Стратегия">
             <select class="state-strat-sel"
                     data-key="${escapeHtml(e.key)}"
@@ -514,7 +614,31 @@ async function loadState(useCache) {
       return nums.length <= 3 ? nums.join(", ") : `${nums[0]}–${nums[nums.length - 1]}`;
     };
 
-    const groupHtml = (b) => {
+    // Кнопка «в группу» и галочка кладут в группу ТО ИМЯ, У КОТОРОГО СТОЯТ:
+    // строка — своё точное имя, заголовок автогруппы — домен целиком (он
+    // покрывает поддомены, и finland10000…10100.discord.media уходят одним
+    // кликом). Подставлять родителя за строку нельзя: у игр и приложений
+    // часть имён живёт на общей инфраструктуре — ngx.download.nvidia.com,
+    // down.anticheatexpert.com (античит ACE у многих игр), crashsight.wetest.net,
+    // — и родитель утащил бы в группу «Endfield» всю NVIDIA. Список в окне
+    // всё равно можно поправить перед сохранением.
+    const assignHtml = (name) => {
+      if (!ugView || name.indexOf(":") >= 0 || /^[0-9.]+$/.test(name)) return "";
+      const parent = name;
+      return `<button type="button" class="btn-icon ug-assign" data-domain="${escapeHtml(parent)}"
+                title="Добавить ${escapeHtml(parent)} в группу" aria-label="Добавить ${escapeHtml(parent)} в группу">${_icons.folderPlus}</button>`;
+    };
+
+    // Галочка отметки — у тех же мест, что и кнопка «в группу»: у каждой
+    // строки без группы (включая строки автогрупп) и у заголовка автогруппы.
+    const pickHtml = (name) => {
+      if (!ugView || name.indexOf(":") >= 0 || /^[0-9.]+$/.test(name)) return "";
+      const parent = name;
+      return `<input type="checkbox" class="ug-pick" data-domain="${escapeHtml(parent)}"${ugPicked.has(parent) ? " checked" : ""}
+                title="Отметить ${escapeHtml(parent)}" aria-label="Отметить ${escapeHtml(parent)}">`;
+    };
+
+    const groupHtml = (b, child = "") => {
       // Открытость помним по СОСТАВНОМУ ключу: googlevideo.com в quic и в
       // gv_tcp — разные группы, и сворачиваться они обязаны независимо.
       //
@@ -544,7 +668,7 @@ async function loadState(useCache) {
       // действие (сужать его незачем: человек видит, что жмёт), а подпись.
       const whole = !query;
       return `
-        <tbody class="sg${open ? "" : " sg-closed"}" data-group="${escapeHtml(b.gkey)}">
+        <tbody class="sg${open ? "" : " sg-closed"}" data-group="${escapeHtml(b.gkey)}"${child}>
           <tr class="sg-head">
             <td data-label="" class="sg-lead">
               <button class="btn btn-danger btn-icon sg-reset"
@@ -553,12 +677,12 @@ async function loadState(useCache) {
                       data-gkey="${escapeHtml(b.gkey)}">${_icons.close}</button>
             </td>
             <td data-label="Профиль">${escapeHtml(keys.join(", "))}</td>
-            <td data-label="Домен" class="sg-title">
+            <td data-label="Домен" class="sg-title">${b.rows.every(e => meta.get(e).ug < 0) ? pickHtml(b.group) : ""}
               <button type="button" class="sg-toggle" aria-expanded="${open}"
                       data-count="${escapeHtml(countText)}"
                       title="${open ? "Свернуть" : "Раскрыть"}: ${escapeHtml(countText)}">
                 ${_icons.chevronDown}<span class="sg-name">${escapeHtml(b.group)}</span><span class="sg-count" aria-label="${escapeHtml(countText)}">${n}</span>
-              </button>
+              </button>${b.rows.every(e => meta.get(e).ug < 0) ? assignHtml(b.group) : ""}
             </td>
             <td data-label="Стратегия">${escapeHtml(strategySummary(b.rows))}</td>
             <td data-label="Заморозка">
@@ -585,17 +709,81 @@ async function loadState(useCache) {
     // chatgpt.com|6 — один сайт в двух семействах адресов, сворачивать там
     // нечего, а заголовок над парой одинаковых строк только прибавил бы шума.
     // Одиночные строки подряд собираются в общий tbody.
-    let html = "";
-    let loose = "";
-    for (const b of blocks) {
-      if (b.names.size >= 2) {
-        if (loose) { html += `<tbody>${loose}</tbody>`; loose = ""; }
-        html += groupHtml(b);
-      } else {
-        loose += b.rows.map(e => rowHtml(e, false)).join("");
+    const renderBlocks = (list, child = "") => {
+      let out = "";
+      let loose = "";
+      for (const b of list) {
+        if (b.names.size >= 2) {
+          if (loose) { out += `<tbody${child}>${loose}</tbody>`; loose = ""; }
+          out += groupHtml(b, child);
+        } else {
+          loose += b.rows.map(e => rowHtml(e, false)).join("");
+        }
       }
-    }
-    if (loose) html += `<tbody>${loose}</tbody>`;
+      if (loose) out += `<tbody${child}>${loose}</tbody>`;
+      return out;
+    };
+
+    // Заголовок группы человека. Строки под ним — обычные блоки таблицы с
+    // меткой data-ug-of: вложить tbody в tbody HTML не даёт, поэтому
+    // свёрнутость переключается меткой на каждом блоке группы.
+    //
+    // Сводка стратегий — только если вся группа в одном пуле. Номера плеч
+    // живут внутри пула (у quic их девять, у gv_tcp двадцать два), и «1, 3» из
+    // разных наборов читалось бы как одно и то же, чем оно не является.
+    const ugHtml = (i, rows) => {
+      const sec = ugView.sections[i];
+      const open = query ? !searchCollapsed.has("ug:" + sec.name) : stateOpenUgroups.has(sec.name);
+      const n = rows.length;
+      const pools = Array.from(new Set(rows.map(e => String(e.key || "")))).sort();
+      const nFrozen = rows.filter(e => e.mode === "frozen").length;
+      const groupFrozen = nFrozen === n && n > 0;
+      let age = null;
+      for (const e of rows) { const a = meta.get(e).age; if (a !== null && (age === null || a < age)) age = a; }
+      const countText = `${n} ${plural(n, "запись", "записи", "записей")}`;
+      const whole = !query;
+      const child = ` data-ug-of="${i}"${open ? "" : " data-ug-closed"}`;
+      return `
+        <tbody class="ug${open ? "" : " ug-closed"}" data-ug="${i}">
+          <tr class="sg-head ug-head">
+            <td data-label="" class="sg-lead">
+              <button class="btn btn-danger btn-icon ug-reset" data-ug="${i}"
+                      title="Сбросить подбор ${whole ? "для всей группы" : "для найденных в группе"} (${escapeHtml(countText)})"
+                      aria-label="Сбросить подбор ${whole ? "для группы" : "для найденных в группе"} ${escapeHtml(sec.name)}">${_icons.close}</button>
+            </td>
+            <td data-label="Профиль">${escapeHtml(pools.join(", "))}</td>
+            <td data-label="Домен" class="sg-title ug-title">
+              <button type="button" class="sg-toggle ug-toggle" aria-expanded="${open}"
+                      data-count="${escapeHtml(countText)}"
+                      title="${open ? "Свернуть" : "Раскрыть"}: ${escapeHtml(countText)}">
+                ${_icons.chevronDown}<span class="sg-name">${escapeHtml(sec.name)}</span><span class="sg-count" aria-label="${escapeHtml(countText)}">${n}</span>
+              </button>
+              <button type="button" class="btn-icon ug-edit" data-ug="${i}"
+                      title="Изменить группу" aria-label="Изменить группу ${escapeHtml(sec.name)}">${_icons.edit}</button>
+            </td>
+            <td data-label="Стратегия"${pools.length > 1 ? ' title="Номера стратегий у разных пулов несопоставимы"' : ""}>${pools.length === 1 ? escapeHtml(strategySummary(rows)) : "—"}</td>
+            <td data-label="Заморозка">
+              <button class="btn btn-icon ug-freeze" data-ug="${i}"
+                      data-frozen="${groupFrozen ? "1" : "0"}"
+                      style="color:${nFrozen ? "var(--accent)" : "var(--text-muted)"}"
+                      title="${groupFrozen
+                        ? (whole ? "Вся группа заморожена — нажмите, чтобы вернуть авторотацию"
+                                 : "Все найденные заморожены — нажмите, чтобы вернуть авторотацию")
+                        : (whole ? "Заморозить всю группу на текущих стратегиях"
+                                 : "Заморозить найденные на текущих стратегиях")}">${groupFrozen ? _icons.lockClosed : _icons.lockOpen}</button>
+              ${nFrozen
+                ? `<span class="sg-frozen">${nFrozen === n && whole ? "все" : `${nFrozen} из ${n}`}</span>`
+                : ""}</td>
+            <td data-label="Возраст" class="state-age">${fmtAge(age)}</td>
+          </tr>
+        </tbody>
+        ${renderBlocks(buildStateBlocks(rows, meta), child)}
+      `;
+    };
+
+    let html = "";
+    ugParts.forEach((rows, i) => { if (rows.length) html += ugHtml(i, rows); });
+    html += renderBlocks(blocks);
 
     const arrow = k => stateSort.key === k ? (stateSort.dir === "asc" ? " " + _icons.arrowUp : " " + _icons.arrowDown) : "";
     const th = (k, label) => `<th class="sortable" data-sort="${k}">${label}${arrow(k)}</th>`;
@@ -607,7 +795,7 @@ async function loadState(useCache) {
         Сортировка: ${sortLabel} ${sortArrow}
       </button>
       <div class="table-scroll">
-      <table class="state-table${blocks.some(b => b.names.size >= 2) ? " sg-any" : ""}">
+      <table class="state-table${blocks.some(b => b.names.size >= 2) || ugParts.some(r => r.length) ? " sg-any" : ""}">
         <thead>
           <tr><th></th>${th("key","Профиль")}${th("host","Домен")}${th("strategy","Стратегия")}${th("frozen","Заморозка")}${th("age","Возраст")}</tr>
         </thead>
@@ -681,6 +869,69 @@ async function loadState(useCache) {
         }
       });
     });
+    // Группы человека. Обработчики — те же правила, что у автогрупп выше:
+    // раскрытие без сети и без перерисовки, кнопки в заголовке гасят всплытие,
+    // во время поиска свёрнутость живёт в эфемерном наборе.
+    body.querySelectorAll("tbody.ug").forEach(tb => {
+      const head = tb.querySelector(".ug-head");
+      if (!head) return;
+      head.addEventListener("click", () => {
+        const i = tb.dataset.ug;
+        const sec = ugView && ugView.sections[Number(i)];
+        if (!sec) return;
+        const open = tb.classList.contains("ug-closed");
+        const memo = "ug:" + sec.name;
+        if (query) {
+          if (open) searchCollapsed.delete(memo); else searchCollapsed.add(memo);
+        } else {
+          if (open) stateOpenUgroups.add(sec.name); else stateOpenUgroups.delete(sec.name);
+          saveOpenUgroups();
+        }
+        tb.classList.toggle("ug-closed", !open);
+        body.querySelectorAll(`tbody[data-ug-of="${i}"]`).forEach(c => {
+          if (open) c.removeAttribute("data-ug-closed"); else c.setAttribute("data-ug-closed", "");
+        });
+        const btn = tb.querySelector(".ug-toggle");
+        if (btn) {
+          btn.setAttribute("aria-expanded", String(open));
+          btn.setAttribute("title", `${open ? "Свернуть" : "Раскрыть"}: ${btn.dataset.count}`);
+        }
+      });
+    });
+    body.querySelectorAll(".ug-reset, .ug-freeze").forEach(btn => {
+      btn.addEventListener("click", ev => {
+        ev.stopPropagation();
+        const action = btn.classList.contains("ug-reset") ? "delete"
+          : btn.dataset.frozen === "1" ? "unfreeze" : "freeze";
+        ugBulk(action, btn.dataset.ug, body);
+      });
+    });
+    body.querySelectorAll(".ug-edit").forEach(btn => {
+      btn.addEventListener("click", ev => {
+        ev.stopPropagation();
+        const card = document.getElementById("ug-card");
+        if (card) card.open = true;
+        ugOpenEditor("group", Number(btn.dataset.ug));
+      });
+    });
+    body.querySelectorAll(".ug-pick").forEach(box => {
+      // Клик по галочке в заголовке автогруппы не должен её сворачивать.
+      box.addEventListener("click", ev => ev.stopPropagation());
+      box.addEventListener("change", () => {
+        const d = box.dataset.domain;
+        if (box.checked) ugPicked.add(d); else ugPicked.delete(d);
+        // Тот же сайт может стоять несколькими строками (v4/v6, разные пулы).
+        body.querySelectorAll(".ug-pick").forEach(o => { if (o.dataset.domain === d) o.checked = box.checked; });
+        renderUgSelbar();
+      });
+    });
+    renderUgSelbar();
+    body.querySelectorAll(".ug-assign").forEach(btn => {
+      btn.addEventListener("click", ev => {
+        ev.stopPropagation();
+        ugAssign(btn.dataset.domain);
+      });
+    });
     const sortBtn = document.getElementById("state-sort-btn");
     if (sortBtn) sortBtn.addEventListener("click", () => openSortSheet(resortState));
     body.querySelectorAll("th.sortable").forEach(th => {
@@ -752,6 +1003,377 @@ async function stateBulk(action, tb) {
   const total = Number(res && res.total) || n;
   toast(done === total ? `Готово: ${done}` : `Сделано ${done} из ${total}`);
   loadState();
+}
+
+// Пакетное действие над группой человека. Хосты — из разметки, как у
+// автогрупп: действие обязано совпадать с тем, что на экране. Группа может
+// жить в нескольких пулах, а /state/bulk работает с одним, поэтому запросы
+// идут по пулу, и пулы названы в подтверждении: сброс в чужом пуле — ровно то,
+// о чём человек должен знать до нажатия.
+async function ugBulk(action, i, body) {
+  const sec = ugView && ugView.sections[Number(i)];
+  if (!sec) return;
+  const rows = Array.from(body.querySelectorAll(`tbody[data-ug-of="${i}"] .state-del`));
+  const byPool = new Map();
+  for (const b of rows) {
+    if (!b.dataset.key || !b.dataset.host) continue;
+    if (!byPool.has(b.dataset.key)) byPool.set(b.dataset.key, []);
+    byPool.get(b.dataset.key).push(b.dataset.host);
+  }
+  const n = Array.from(byPool.values()).reduce((k, h) => k + h.length, 0);
+  if (!n) return;
+  const word = { delete: "Сбросить подбор", freeze: "Заморозить", unfreeze: "Разморозить" }[action];
+  const tail = action === "delete"
+    ? "Подбор для этих доменов начнётся с первой стратегии при следующей попытке."
+    : action === "freeze"
+      ? "Каждая строка закрепится на СВОЕЙ текущей стратегии, ротация для них остановится."
+      : "Ротация для этих строк продолжится с текущей стратегии.";
+  if (!confirm(`${word}: ${sec.name}, записей: ${n}?\nПулы: ${Array.from(byPool.keys()).sort().join(", ")}.\n\n${tail}`)) return;
+  let done = 0;
+  try {
+    for (const [key, hosts] of byPool) {
+      const res = await apiPostText(`/state/bulk?action=${encodeURIComponent(action)}&key=${encodeURIComponent(key)}`,
+                                    hosts.join("\n") + "\n");
+      done += Number(res && res.done) || 0;
+    }
+    toast(done === n ? `Готово: ${done}` : `Сделано ${done} из ${n}`);
+  } catch (e) {
+    toastErr(`Сделано ${done} из ${n}. Не удалось завершить: `, e);
+  }
+  loadState();
+}
+
+// --- карточка «Группы доменов» ---------------------------------------------
+
+function ugPlural(n) {
+  const d = n % 10, h = n % 100;
+  if (d === 1 && h !== 11) return "группа";
+  if (d >= 2 && d <= 4 && (h < 12 || h > 14)) return "группы";
+  return "групп";
+}
+
+function renderUgManager() {
+  const box = document.getElementById("ug-body");
+  const status = document.getElementById("ug-status");
+  if (!box) return;
+  // Карточка перерисовывается на каждой сетевой загрузке таблицы — «Обновить»,
+  // правка строки, групповое действие. Открытый редактор при этом обязан
+  // сохранить набранное: раньше он заново заполнялся из файла, и имя с
+  // доменами молча пропадали.
+  // Только в ТОТ ЖЕ редактор: открыв правку другой группы, человек не ждёт в
+  // ней текст предыдущей.
+  const edKey = ugEdit ? ugEdit.mode + ":" + ugEdit.index : "";
+  const prevEd = document.getElementById("ug-editor");
+  const typed = ugEdit && prevEd && !prevEd.hidden && prevEd.dataset.ed === edKey ? {
+    name: document.getElementById("ug-name")?.value,
+    body: document.getElementById("ug-domains")?.value,
+    focus: document.activeElement && document.activeElement.id,
+  } : null;
+  if (!ugView) {
+    if (status) status.textContent = ugError ? "Недоступны" : "Загрузка…";
+    box.innerHTML = ugError
+      ? `<p class="wl-error">Не удалось загрузить группы: ${escapeHtml(ugError)}</p>`
+      : skeletonLines(2);
+    return;
+  }
+  const secs = ugView.sections;
+  if (status) status.textContent = secs.length ? `${secs.length} ${ugPlural(secs.length)}` : "Нет групп";
+  // Сколько записей таблицы попало в группу: группа без единой записи — не
+  // ошибка (сервис ещё не открывали), но человеку стоит это видеть, иначе
+  // «я завёл группу, а в таблице её нет» выглядит как поломка.
+  const hits = secs.map(() => 0);
+  for (const e of stateCache || []) {
+    if (hiddenStrategyPool(e.key) || e.host === "nohost") continue;
+    const ug = entryUg(e);
+    if (ug >= 0) hits[ug]++;
+  }
+  const list = secs.length ? `<ul class="ug-list">${secs.map((sec, i) => `
+      <li>
+        <span class="ug-list-name">${escapeHtml(sec.name)}</span>
+        <span class="ug-list-meta">${sec.domains.length} ${plural3(sec.domains.length, "домен", "домена", "доменов")} · ${hits[i] ? `${hits[i]} ${plural3(hits[i], "запись", "записи", "записей")} в таблице` : "в таблице пока нет записей"}</span>
+        <span class="ug-list-actions">
+          <button type="button" class="btn ug-m-edit" data-ug="${i}">Изменить</button>
+          <button type="button" class="btn btn-danger ug-m-del" data-ug="${i}">Удалить</button>
+        </span>
+      </li>`).join("")}</ul>`
+    : `<p class="desc">Групп пока нет. Создайте группу здесь или нажмите значок папки рядом с доменом в таблице.</p>`;
+  const ed = ugEdit;
+  const sec = ed && ed.mode === "group" ? secs[ed.index] : null;
+  const title = !ed ? "" : ed.mode === "new" ? "Новая группа" : ed.mode === "text" ? "Все группы текстом" : `Группа «${sec ? sec.name : ""}»`;
+  const hint = !ed ? "" : ed.mode === "text"
+    ? "Имя группы — в квадратных скобках, под ним домены по одному на строку. Строки с # — комментарии."
+    : "Один домен на строку; поддомены входят автоматически. Строки с # — комментарии.";
+  let bodyText = "";
+  if (ed && ed.mode === "text") bodyText = ugView.text;
+  else if (sec) {
+    const { lines } = domainGroupSections(ugView.text);
+    const raw = lines.slice(sec.start + 1, sec.end);
+    while (raw.length && !raw[raw.length - 1].trim()) raw.pop();
+    bodyText = raw.join("\n");
+  }
+  box.innerHTML = `
+    ${list}
+    <div class="btn-row ug-tools">
+      <button type="button" class="btn btn-primary" id="ug-new">Новая группа</button>
+      <button type="button" class="btn" id="ug-text">Редактировать как текст</button>
+    </div>
+    <section class="wl-editor ug-editor" id="ug-editor" data-ed="${escapeHtml(edKey)}"${ed ? "" : " hidden"} aria-labelledby="ug-editor-title">
+      <h3 id="ug-editor-title">${escapeHtml(title)}</h3>
+      <p class="desc">${escapeHtml(hint)}</p>
+      ${ed && ed.mode !== "text" ? `<label class="field"><span class="field-label">Имя группы</span>
+        <input id="ug-name" type="text" maxlength="48" autocomplete="off" placeholder="Например, Discord" value="${escapeHtml(sec ? sec.name : "")}"></label>` : ""}
+      <label class="field"><span class="field-label">${ed && ed.mode === "text" ? "Файл групп" : "Домены"}</span>
+        <textarea id="ug-domains" rows="${ed && ed.mode === "text" ? 14 : 8}" spellcheck="false" autocapitalize="off" placeholder="discord.com&#10;discord.media">${escapeHtml(bodyText)}</textarea></label>
+      <p class="wl-error" id="ug-error" role="alert" hidden></p>
+      <div class="wl-actions">
+        <button type="button" class="btn btn-primary" id="ug-save">Сохранить</button>
+        <button type="button" class="btn" id="ug-cancel">Отмена</button>
+      </div>
+    </section>
+  `;
+  if (typed) {
+    const n = document.getElementById("ug-name");
+    const d = document.getElementById("ug-domains");
+    if (n && typeof typed.name === "string") n.value = typed.name;
+    if (d && typeof typed.body === "string") d.value = typed.body;
+    if (typed.focus === "ug-name" || typed.focus === "ug-domains") document.getElementById(typed.focus)?.focus();
+  }
+  const disable = () => box.querySelectorAll("button, input, textarea").forEach(el => { el.disabled = ugBusy; });
+  disable();
+  box.querySelectorAll(".ug-m-edit").forEach(b => b.addEventListener("click", () => ugOpenEditor("group", Number(b.dataset.ug))));
+  box.querySelectorAll(".ug-m-del").forEach(b => b.addEventListener("click", () => ugDelete(Number(b.dataset.ug))));
+  const on = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener("click", fn); };
+  on("ug-new", () => ugOpenEditor("new", -1));
+  on("ug-text", () => ugOpenEditor("text", -1));
+  on("ug-cancel", () => { ugEdit = null; renderUgManager(); });
+  on("ug-save", ugSaveEditor);
+}
+
+function plural3(n, one, few, many) {
+  const d = n % 10, h = n % 100;
+  if (d === 1 && h !== 11) return one;
+  if (d >= 2 && d <= 4 && (h < 12 || h > 14)) return few;
+  return many;
+}
+
+function ugOpenEditor(mode, index) {
+  if (!ugView || ugBusy) return;
+  ugEdit = { mode, index };
+  renderUgManager();
+  const focus = document.getElementById(mode === "text" ? "ug-domains" : "ug-name");
+  if (focus) focus.focus();
+  const ed = document.getElementById("ug-editor");
+  if (ed && ed.scrollIntoView) ed.scrollIntoView({ block: "nearest" });
+}
+
+function ugShowError(message) {
+  const el = document.getElementById("ug-error");
+  if (!el) { if (message) toast(message); return; }
+  el.textContent = message || "";
+  el.hidden = !message;
+}
+
+// Запись файла групп. Версию берём ту, от которой человек начал правку: если
+// группы успели поменять с другого устройства, сервер ответит 409, и текст в
+// редакторе останется на месте — его можно скопировать, а не набирать заново.
+async function ugCommit(text, doneMsg, onError = ugShowError) {
+  if (!ugView || ugBusy) return false;
+  if (new TextEncoder().encode(text).length > 262144) { onError("Группы занимают больше 256 КБ."); return false; }
+  ugBusy = true;
+  ugGen++;
+  renderUgManagerKeep();
+  try {
+    const saved = await apiPostText("/domain-groups/save?revision=" + encodeURIComponent(ugView.revision), text);
+    // Сервер нормализует текст (регистр, повторы), поэтому перечитываем. Но
+    // запись уже состоялась: если перечитать не вышло, держим отправленный
+    // текст с ВЕРСИЕЙ ИЗ ОТВЕТА — иначе следующая правка ушла бы со старой
+    // версией и получила ложный отказ про другое устройство.
+    let fresh = null;
+    try { fresh = await apiGet("/domain-groups"); } catch (_) { fresh = null; }
+    if (fresh && typeof fresh.text === "string") setUgView(fresh.text, fresh.revision);
+    else setUgView(text, saved && saved.revision);
+    ugEdit = null;
+    toast(doneMsg);
+    return true;
+  } catch (e) {
+    onError(errMsg(e));
+    return false;
+  } finally {
+    // Вход в функцию закрыт проверкой ugBusy: вторая запись не начнётся, пока
+    // не кончилась эта. Линтер видит «запись после await», но не видит гейта.
+    // eslint-disable-next-line require-atomic-updates
+    ugBusy = false;
+    ugGen++;
+    // Успех — перерисовать карточку и таблицу по кэшу: строки /state не
+    // менялись, а за ними на роутер ходить секунды. Отказ — оставить
+    // редактор как есть, только вернуть кнопки.
+    if (!ugEdit) { renderUgManager(); resortState(); }
+    else document.querySelectorAll("#ug-body button, #ug-body input, #ug-body textarea").forEach(el => { el.disabled = false; });
+  }
+}
+
+// Во время записи — заблокировать кнопки, не трогая набранный текст.
+function renderUgManagerKeep() {
+  document.querySelectorAll("#ug-body button, #ug-body input, #ug-body textarea").forEach(el => { el.disabled = true; });
+}
+
+async function ugSaveEditor() {
+  const ed = ugEdit;
+  if (!ed || !ugView) return;
+  const area = document.getElementById("ug-domains");
+  const body = area ? area.value : "";
+  if (ed.mode === "text") {
+    const problem = domainGroupsTextProblem(body);
+    if (problem) { ugShowError(problem); return; }
+    await ugCommit(body, "Группы сохранены");
+    return;
+  }
+  const nameEl = document.getElementById("ug-name");
+  const name = (nameEl ? nameEl.value : "").trim();
+  const problem = domainGroupProblem(ugView.sections, ed.mode === "group" ? ed.index : -1, name, body);
+  if (problem) { ugShowError(problem); return; }
+  const old = ed.mode === "group" ? ugView.sections[ed.index] : null;
+  const text = old ? domainGroupsReplace(ugView.text, ed.index, name, body) : domainGroupsAppend(ugView.text, name, body);
+  // Переименование не должно сворачивать группу: память о раскрытии — по имени.
+  if (await ugCommit(text, old ? "Группа сохранена" : `Группа «${name}» создана`) && old && old.name !== name &&
+      stateOpenUgroups.delete(old.name)) {
+    stateOpenUgroups.add(name);
+    saveOpenUgroups();
+  }
+}
+
+async function ugDelete(i) {
+  const sec = ugView && ugView.sections[i];
+  if (!sec || ugBusy) return;
+  if (!confirm(`Удалить группу «${sec.name}»?\n\nДомены вернутся в общий список таблицы. Записи стратегий не меняются.`)) return;
+  // Память раскрытия — по имени. Забываем её вместе с группой, иначе новая
+  // группа с тем же именем рождалась бы развёрнутой.
+  if (await ugCommit(domainGroupsReplace(ugView.text, i, "", ""), "Группа удалена") && stateOpenUgroups.delete(sec.name)) {
+    saveOpenUgroups();
+  }
+}
+
+// Панель отмеченного: сколько сайтов, «В группу…», «Снять отметки» и, пока
+// задан поиск, «Отметить найденные». Живёт снаружи #state-body, как поле
+// поиска: таблица перерисовывается на каждую букву, а панель — только по делу.
+function renderUgSelbar() {
+  const bar = document.getElementById("ug-selbar");
+  if (!bar) return;
+  // Отмеченное, что тем временем попало в группу (значком, редактором, с
+  // другого устройства), из отметок уходит: у такой строки галочки уже нет, и
+  // счётчик показывал бы то, что снять нельзя.
+  if (ugView) for (const d of Array.from(ugPicked)) if (matchDomainGroup(ugView.index, d) >= 0) ugPicked.delete(d);
+  const query = (document.getElementById("state-search")?.value || "").trim();
+  const fresh = ugPickable.filter(d => !ugPicked.has(d));
+  if (!ugView || (!ugPicked.size && !(query && fresh.length))) { bar.hidden = true; bar.innerHTML = ""; return; }
+  bar.hidden = false;
+  bar.innerHTML = `
+    <span class="ug-selbar-count" role="status" aria-live="polite">${ugPicked.size
+      ? `Отмечено доменов: ${ugPicked.size}` : "Ничего не отмечено"}</span>
+    <div class="btn-row">
+      ${query && fresh.length ? `<button type="button" class="btn" id="ug-pick-found">Отметить найденные · ${fresh.length}</button>` : ""}
+      ${ugPicked.size ? `<button type="button" class="btn btn-primary" id="ug-pick-assign">В группу…</button>
+      <button type="button" class="btn" id="ug-pick-clear">Снять отметки</button>` : ""}
+    </div>`;
+  const on = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener("click", fn); };
+  on("ug-pick-found", () => { fresh.forEach(d => ugPicked.add(d)); resortState(); });
+  on("ug-pick-clear", () => { ugPicked.clear(); resortState(); });
+  on("ug-pick-assign", () => ugAssign(Array.from(ugPicked).sort()));
+}
+
+// Окно «Добавить в группу». Построено как confirmModal (job.js): подложка,
+// ловушка фокуса, Escape и клик мимо окна — отказ. Отмена носит id
+// confirm-cancel: по нему навигация закрывает висящее окно штатно, а не
+// вырывает его из DOM вместе с несброшенным обработчиком клавиатуры.
+function ugAssign(domainOrList) {
+  // Массив приходит только из панели отмеченного — и тогда после переноса
+  // отметки снимаются, даже если отмечен был один домен.
+  const fromPicked = Array.isArray(domainOrList);
+  const many = fromPicked && domainOrList.length > 1;
+  const list = Array.isArray(domainOrList) ? domainOrList : [domainOrList];
+  const domain = list[0] || "";
+  if (!ugView || ugBusy || document.querySelector(".modal-backdrop.ug-assign-modal")) return;
+  // Открытый редактор группы перерисовался бы после записи и потерял набранное.
+  if (ugEdit) { toast("Сначала сохраните или отмените правку в карточке «Группы доменов»"); return; }
+  const secs = ugView.sections;
+  const prevFocus = document.activeElement;
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop ug-assign-modal";
+  backdrop.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ug-assign-title">
+      <h3 id="ug-assign-title">Добавить в группу</h3>
+      ${many ? `<label class="field"><span class="field-label">Домены · по одному на строку</span>
+        <textarea id="ug-assign-list" class="ug-assign-list" rows="${Math.min(list.length, 8)}" spellcheck="false" autocapitalize="off">${escapeHtml(list.join("\n"))}</textarea></label>
+      <p class="desc">Поддомены попадут в группу вместе с ними. Имя общего сервиса
+        (nvidia.com, античит) лучше оставить полным, чтобы не забрать в группу чужое.</p>`
+      : `<label class="field"><span class="field-label">Домен</span>
+        <input id="ug-assign-domain" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" value="${escapeHtml(domain)}"></label>
+      <p class="desc">Поддомены попадут в группу вместе с ним.</p>`}
+      <label class="field"><span class="field-label">Группа</span>
+        <select id="ug-assign-group">
+          ${secs.map((s, i) => `<option value="${i}">${escapeHtml(s.name)}</option>`).join("")}
+          <option value="-1">Новая группа…</option>
+        </select></label>
+      <label class="field" id="ug-assign-new"${secs.length ? " hidden" : ""}><span class="field-label">Имя новой группы</span>
+        <input id="ug-assign-name" type="text" maxlength="48" autocomplete="off" placeholder="Например, Discord"></label>
+      <p class="wl-error" id="ug-assign-error" role="alert" hidden></p>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="ug-assign-ok">Добавить</button>
+        <button class="btn" id="confirm-cancel">Отмена</button>
+      </div>
+    </div>`;
+  document.body.appendChild(backdrop);
+  const q = sel => backdrop.querySelector(sel);
+  const groupSel = q("#ug-assign-group");
+  if (!secs.length) groupSel.value = "-1";
+  const syncNew = () => { q("#ug-assign-new").hidden = groupSel.value !== "-1"; };
+  groupSel.addEventListener("change", () => { syncNew(); if (groupSel.value === "-1") q("#ug-assign-name").focus(); });
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    document.removeEventListener("keydown", onKey);
+    backdrop.remove();
+    if (prevFocus && typeof prevFocus.focus === "function") prevFocus.focus();
+  };
+  const fail = msg => { const el = q("#ug-assign-error"); el.textContent = msg; el.hidden = !msg; };
+  function onKey(e) {
+    if (e.key === "Escape") { close(); return; }
+    if (e.key === "Enter" && e.target && e.target.tagName === "INPUT") { e.preventDefault(); submit(); return; }
+    if (e.key !== "Tab") return;
+    const stops = Array.from(backdrop.querySelectorAll("input, select, textarea, button")).filter(el => !el.disabled && !el.closest("[hidden]"));
+    if (!stops.length) return;
+    const first = e.shiftKey ? stops[stops.length - 1] : stops[0];
+    const last = e.shiftKey ? stops[0] : stops[stops.length - 1];
+    if (document.activeElement === last || !backdrop.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+  }
+  async function submit() {
+    const ds = many
+      ? Array.from(new Set(q("#ug-assign-list").value.split("\n").map(x => x.trim().toLowerCase()).filter(x => x && x[0] !== "#")))
+      : [q("#ug-assign-domain").value.trim().toLowerCase()];
+    if (!ds.length || !ds[0]) { fail("Укажите хотя бы один домен."); return; }
+    const idx = Number(groupSel.value);
+    const sec = idx >= 0 ? ugView.sections[idx] : null;
+    const name = sec ? sec.name : q("#ug-assign-name").value.trim();
+    const problem = domainGroupProblem(ugView.sections, sec ? idx : -1, name,
+      (sec ? sec.domains.join("\n") + "\n" : "") + ds.join("\n"));
+    if (problem) { fail(problem); return; }
+    q("#ug-assign-ok").disabled = true;
+    let why = "";
+    // Одна запись на всё отмеченное: десять сайтов — одна версия файла и
+    // одно «сохранено», а не десять гонок за compare-and-swap.
+    const text = ds.reduce((t, d) => domainGroupsAdd(t, name, d), ugView.text);
+    const ok = await ugCommit(text, ds.length > 1 ? `В «${name}» добавлено доменов: ${ds.length}` : `${ds[0]} → «${name}»`,
+                              m => { why = m; });
+    if (closed) return;
+    if (ok) { if (fromPicked) { ugPicked.clear(); renderUgSelbar(); } close(); }
+    else { q("#ug-assign-ok").disabled = false; fail(why || "Не удалось сохранить группы."); }
+  }
+  q("#ug-assign-ok").addEventListener("click", submit);
+  q("#confirm-cancel").addEventListener("click", close);
+  backdrop.addEventListener("click", e => { if (e.target === backdrop) close(); });
+  document.addEventListener("keydown", onKey);
+  (secs.length ? groupSel : q("#ug-assign-name")).focus();
 }
 
 async function stateDelete(key, host) {

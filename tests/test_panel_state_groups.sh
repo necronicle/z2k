@@ -94,6 +94,48 @@ else
     no "родитель домена" "0 плохих из 13" "$(printf '%s' "$out" | tr '\n' ' ')"
 fi
 
+# --- группы человека: модель -------------------------------------------------
+# Сопоставление по окончанию имени и правки файла построчно. Функции вынимаются
+# из склейки и исполняются: проверка «в файле есть строка» здесь бесполезна.
+for fn in domainGroupSections domainGroupIndex matchDomainGroup dgJoin domainGroupsAdd domainGroupsReplace domainGroupsAppend domainGroupProblem domainGroupsTextProblem; do
+    awk -v f="function $fn(" 'index($0, "  " f) == 1 {g=1} g {print} g && /^  }$/ {exit}' "$JS"
+done | sed 's/^  //' > "$TMP/ug.js"
+cat >> "$TMP/ug.js" <<'JS'
+const out = [];
+const t = (label, cond, got) => out.push((cond ? "OK " : "BAD ") + label + (cond ? "" : " — " + got));
+const text = "# мои\n[Google]\ngoogle.com\n\n[Почта]\nmail.google.com\n# заметка\n";
+const { sections } = domainGroupSections(text);
+const idx = domainGroupIndex(sections);
+t("секции разобраны", sections.length === 2 && sections[1].name === "Почта", JSON.stringify(sections));
+t("поддомен попадает в группу домена", matchDomainGroup(idx, "www.google.com|4") === 0, matchDomainGroup(idx, "www.google.com|4"));
+t("самое длинное совпадение выигрывает", matchDomainGroup(idx, "x.mail.google.com|6") === 1, matchDomainGroup(idx, "x.mail.google.com|6"));
+t("похожий хвост не совпадает", matchDomainGroup(idx, "notgoogle.com|4") === -1, matchDomainGroup(idx, "notgoogle.com|4"));
+t("адрес ни в какую группу", matchDomainGroup(domainGroupIndex(domainGroupSections("[N]\n4\n").sections), "1.2.3.4|4") === -1, "совпал");
+const added = domainGroupsAdd(text, "почта", "gmail.com");
+t("добавление в секцию без учёта регистра и с комментариями на месте",
+  added === "# мои\n[Google]\ngoogle.com\n\n[Почта]\nmail.google.com\n# заметка\ngmail.com\n", JSON.stringify(added));
+t("новая группа дописывается в конец",
+  domainGroupsAdd(text, "Discord", "discord.com").endsWith("# заметка\n\n[Discord]\ndiscord.com\n"), JSON.stringify(domainGroupsAdd(text, "Discord", "discord.com")));
+t("удаление секции не задевает соседей",
+  domainGroupsReplace(text, 0, "", "") === "# мои\n[Почта]\nmail.google.com\n# заметка\n", JSON.stringify(domainGroupsReplace(text, 0, "", "")));
+t("кириллический двойник имени отклонён", /уже есть/.test(domainGroupProblem(sections, -1, "ПОЧТА", "x.org")), domainGroupProblem(sections, -1, "ПОЧТА", "x.org"));
+t("домен из другой группы отклонён", /Google/.test(domainGroupProblem(sections, 1, "Почта", "google.com")), domainGroupProblem(sections, 1, "Почта", "google.com"));
+t("адрес сайта с протоколом отклонён", /не домен/.test(domainGroupProblem(sections, -1, "X", "https://x.org")), domainGroupProblem(sections, -1, "X", "https://x.org"));
+t("режим текста: кириллический двойник имени отклонён",
+  /регистром/.test(domainGroupsTextProblem("[Дискорд]\na.com\n[дискорд]\nb.com\n")), domainGroupsTextProblem("[Дискорд]\na.com\n[дискорд]\nb.com\n"));
+t("режим текста: разные имена проходят", domainGroupsTextProblem("[A]\na.com\n[B]\nb.com\n") === "", "отказ");
+t("скобки в имени отклонены", /скобки/.test(domainGroupProblem(sections, -1, "a]b", "x.org")), domainGroupProblem(sections, -1, "a]b", "x.org"));
+console.log(out.join("\n"));
+JS
+ug_out=$(node "$TMP/ug.js" 2>&1)
+ug_bad=$(printf '%s\n' "$ug_out" | grep -c '^BAD' || true)
+ug_ok=$(printf '%s\n' "$ug_out" | grep -c '^OK' || true)
+if [ "$ug_bad" = 0 ] && [ "$ug_ok" -ge 14 ]; then
+    ok "группы человека, модель: $ug_ok случаев (суффиксы, правки файла, проверки ввода)"
+else
+    no "группы человека, модель" "0 плохих из 14" "$(printf '%s' "$ug_out" | tr '\n' ' ')"
+fi
+
 # --- отрисовка ---------------------------------------------------------------
 DRV="$TMP/driver.js"
 cat > "$DRV" <<'DRIVER'
@@ -210,6 +252,15 @@ global.fetch = async (url, init) => {
     body = { ok: true, entries: ENTRIES };
   }
   if (p === "/pools") body = { ok: true, pools: { rkn_tcp: 50 } };
+  // Группы человека. По умолчанию файла нет — таблица обязана выглядеть
+  // ровно как до появления групп; сценарии про группы кладут свой текст.
+  if (p === "/domain-groups") {
+    if (global.__groupsFail) {
+      return { ok: false, status: 404, statusText: "Not Found",
+               json: async () => ({ ok: false, error: "unknown route" }), text: async () => '{"ok":false}' };
+    }
+    body = { ok: true, revision: "0".repeat(64), text: global.__groupsText || "" };
+  }
   return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
 };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -488,6 +539,106 @@ const SC = {
             after.replace(/\s+/g, " ").slice(0, 300));
     },
   },
+  // ГРУППЫ ЧЕЛОВЕКА. Discord собран из разных родителей и разных пулов —
+  // ровно то, чего автогруппировка сделать не может.
+  ugroups: {
+    setup() {
+      global.__groupsText = "[Discord]\ndiscord.media\ndiscordapp.com\n\n[Пустая]\nnever.example\n";
+      localStorage.setItem("z2k-state-sort", JSON.stringify({ key: "host", dir: "asc" }));
+    },
+    async run() {
+      const html = sel("#state-body").innerHTML;
+      const heads = [...html.matchAll(/<tbody class="ug([^"]*)" data-ug="(\d+)">([\s\S]*?)<\/tbody>/g)];
+      check("заголовок только у группы, где есть записи", heads.length === 1 && heads[0][2] === "0",
+            JSON.stringify(heads.map(h => h[2])));
+      const head = heads.length ? heads[0][3] : "";
+      check("группа названа именем человека", /class="sg-name">Discord</.test(head), head.slice(0, 300));
+      check("в группе записи разных родителей и пулов: 6",
+            /class="sg-count"[^>]*>6</.test(head), head.replace(/\s+/g, " ").slice(0, 400));
+      check("профили группы перечислены", />quic, rkn_tcp</.test(head), head.replace(/\s+/g, " ").slice(0, 400));
+      check("номера стратегий разных пулов не сводятся в одну строку",
+            /data-label="Стратегия"[^>]*>—</.test(head), head.replace(/\s+/g, " ").slice(0, 600));
+      check("группа по умолчанию свёрнута", heads.length && /ug-closed/.test(heads[0][1]), heads.length && heads[0][1]);
+      const kids = [...html.matchAll(/<tbody([^>]*data-ug-of="0"[^>]*)>([\s\S]*?)<\/tbody>/g)];
+      const kidHosts = kids.flatMap(k => [...k[2].matchAll(/state-del"[\s\S]*?data-host="([^"]*)"/g)].map(x => x[1]));
+      check("все записи группы помечены и скрыты вместе с ней",
+            kidHosts.length === 6 && kids.every(k => /data-ug-closed/.test(k[1])),
+            JSON.stringify(kids.map(k => k[1])) + " " + kidHosts.join(","));
+      check("внутри группы работает автогруппа поддоменов",
+            kids.some(k => /data-group="rkn_tcp\|discord\.media"/.test(k[1])), JSON.stringify(kids.map(k => k[1])));
+      const firstUg = html.indexOf('class="ug');
+      const firstLoose = html.indexOf('data-host="1.2.3.4|4"');
+      check("группы человека стоят выше строк без группы", firstUg >= 0 && firstUg < firstLoose, firstUg + " / " + firstLoose);
+      check("у строки в группе нет кнопки «в группу»",
+            !kids.some(k => /ug-assign/.test(k[2])), "кнопка внутри группы");
+      // Строка кладёт в группу СВОЁ имя, заголовок автогруппы — домен целиком.
+      // Родитель за строку подставлять нельзя: ngx.download.nvidia.com в
+      // группе игры не должен тянуть за собой всю nvidia.com.
+      check("строка добавляется своим именем, заголовок автогруппы — доменом",
+            /ug-assign" data-domain="sport\.other\.co\.uk"/.test(html) &&
+            /ug-assign" data-domain="bbc\.co\.uk"/.test(html) &&
+            /class="ug-pick" data-domain="news\.bbc\.co\.uk"/.test(html) &&
+            !/data-domain="other\.co\.uk"/.test(html),
+            (html.match(/data-domain="[^"]*"/g) || []).join(","));
+    },
+  },
+  // ОТМЕТКА ГАЛОЧКАМИ. Отмечается сайт (родитель), отметка переживает
+  // перерисовку по поиску — иначе собрать в группу находки двух разных
+  // поисков было бы нельзя.
+  ugpick: {
+    setup() { global.__groupsText = "[Discord]\ndiscord.media\n"; },
+    async run() {
+      let html = sel("#state-body").innerHTML;
+      check("у строк без группы есть галочка отметки",
+            /class="ug-pick" data-domain="chatgpt\.com"/.test(html) && /class="ug-pick" data-domain="bbc\.co\.uk"/.test(html),
+            (html.match(/class="ug-pick" data-domain="[^"]*"/g) || []).join(","));
+      check("у строк в группе галочки нет", !/class="ug-pick" data-domain="[^"]*discord\.media"/.test(html), "галочка в группе");
+      const box = sel("#state-body>.ug-pick");
+      box.dataset.domain = "chatgpt.com"; box.checked = true; box.fire("change");
+      check("панель отмеченного показывает счёт", /Отмечено доменов: 1/.test(sel("#ug-selbar").innerHTML) && !sel("#ug-selbar").hidden,
+            sel("#ug-selbar").innerHTML.replace(/\s+/g, " ").slice(0, 200));
+      const input = sel("#state-search");
+      input.value = "chat"; input.fire("input"); await sleep(40);
+      input.value = ""; input.fire("input"); await sleep(40);
+      html = sel("#state-body").innerHTML;
+      check("отметка пережила поиск", /data-domain="chatgpt\.com" checked/.test(html),
+            (html.match(/data-domain="chatgpt\.com"[^>]*>/) || [""])[0]);
+      // Пустая выдача не должна оставлять «Отметить найденные» от прошлой
+      // буквы: кнопка отметила бы то, чего на экране уже нет.
+      input.value = "bbc"; input.fire("input"); await sleep(40);
+      check("на выдаче есть «Отметить найденные»", /ug-pick-found/.test(sel("#ug-selbar").innerHTML), sel("#ug-selbar").innerHTML.slice(0, 200));
+      input.value = "bbczzz"; input.fire("input"); await sleep(40);
+      check("пустая выдача убирает «Отметить найденные»", !/ug-pick-found/.test(sel("#ug-selbar").innerHTML),
+            sel("#ug-selbar").innerHTML.replace(/\s+/g, " ").slice(0, 200));
+    },
+  },
+  // Поиск по имени группы: ни один домен так не называется.
+  ugsearch: {
+    setup() { global.__groupsText = "[Голос и чат]\ndiscord.media\n"; },
+    async run() {
+      const input = sel("#state-search");
+      input.value = "голос"; input.fire("input"); await sleep(40);
+      const html = sel("#state-body").innerHTML;
+      const hosts = [...html.matchAll(/state-del"[\s\S]*?data-host="([^"]*)"/g)].map(x => x[1]);
+      check("поиск по имени группы находит её записи",
+            hosts.length === 5 && hosts.every(h => /discord\.media/.test(h)), hosts.join(","));
+      check("найденная группа раскрыта", !/data-ug-closed/.test(html), "свёрнута");
+      check("счётчик считает найденное по имени группы", /Найдено записей: 5 из/.test(sel("#state-search-count").textContent),
+            sel("#state-search-count").textContent);
+    },
+  },
+  // Роутер старше панели: маршрута нет. Таблица обязана нарисоваться как
+  // раньше, без групп и без кнопок, которые некуда сохранить.
+  ugold: {
+    setup() { global.__groupsFail = true; },
+    async run() {
+      const html = sel("#state-body").innerHTML;
+      check("без маршрута групп таблица на месте", /state-strat-sel/.test(html), html.slice(0, 200));
+      check("без маршрута групп нет кнопок «в группу»", !/ug-assign/.test(html), "кнопки есть");
+      check("карточка групп сообщает, что их нет", /Не удалось загрузить группы/.test(sel("#ug-body").innerHTML),
+            sel("#ug-body").innerHTML.slice(0, 200));
+    },
+  },
 };
 
 for (const dir of ["asc", "desc"]) {
@@ -547,7 +698,7 @@ run_scen() {
         esac
     done
 }
-for scen in render tiebreak remembered toggle search coldtype errorstale age_asc age_desc; do
+for scen in render tiebreak remembered toggle search coldtype errorstale age_asc age_desc ugroups ugsearch ugold ugpick; do
     out=$(run_scen "$JS" "$scen")
     printf '%s\n' "$out"
     PASS=$((PASS + $(printf '%s\n' "$out" | grep -c '^\[PASS\]')))
@@ -587,6 +738,15 @@ meta "свёртывание в выдаче пишется в постоянн�
 meta "поиск до первого ответа бьёт в сеть" coldtype 's/function resortState() { return stateCache ? loadState(true) : Promise.resolve(); }/function resortState() { return loadState(true); }/'
 meta "ошибка подменяется устаревшим кэшем" errorstale 's/^ *stateCache = null;$//'
 meta "ключ группы снова с U+0000 и не переживает разбор" render 's/const GKEY_SEP = "|";/const GKEY_SEP = "\\u0000";/'
+meta "группы человека не раскладываются" ugroups 's/(ug >= 0 ? ugParts\[ug\] : ungrouped)\.push(e);/ungrouped.push(e);/'
+meta "сводка стратегий через разные пулы" ugroups 's/\${pools\.length === 1 ? escapeHtml(strategySummary(rows)) : "—"}/${escapeHtml(strategySummary(rows))}/'
+meta "группы человека раскрыты по умолчанию" ugroups 's/: stateOpenUgroups\.has(sec\.name);/: true;/'
+meta "строка отмечается родителем вместо своего имени" ugroups 's/\${m\.ug < 0 ? pickHtml(m\.name) : ""}/${m.ug < 0 ? pickHtml(groupDomain(m.name)) : ""}/'
+meta "поиск не видит имени группы" ugsearch 's/return ug >= 0 \&\& ugView\.sections\[ug\]\.name\.toLowerCase()\.includes(query);/return false;/'
+meta "поддомен не попадает в группу домена" ugroups 's/if (index\.has(rest)) return index\.get(rest);/if (rest === s \&\& index.has(rest)) return index.get(rest);/'
+meta "отметка теряется при перерисовке" ugpick 's/\${ugPicked\.has(parent) ? " checked" : ""}//'
+meta "пустая выдача оставляет старое «Отметить найденные»" ugpick 's/^ *ugPickable = \[\];$//'
+meta "панель отмеченного не обновляется" ugpick 's/^ *renderUgSelbar();$//'
 meta "панель Discord-войса перерисовывается на каждую букву" search 's/if (!useCache) renderDiscordVoicePanel(entries);/renderDiscordVoicePanel(entries);/'
 
 printf '\nPASSED: %d\nFAILED: %d\nSKIPPED: %d\n' "$PASS" "$FAIL" "$SKIP"

@@ -191,3 +191,178 @@ export function buildStateBlocks(entries, meta) {
     return stateSort.dir === "asc" ? a.age - b.age : b.age - a.age;
   });
 }
+
+// ГРУППЫ ДОМЕНОВ, ЗАДАННЫЕ ЧЕЛОВЕКОМ.
+//
+// Автогруппировка выше собирает поддомены под родителем, но один сервис — это
+// почти всегда несколько РАЗНЫХ родителей: у Discord это discord.com,
+// discord.gg, discordapp.net и discord.media, у YouTube — youtube.com,
+// googlevideo.com, ytimg.com и ggpht.com. Эвристикой их не связать, а
+// публичного списка «какой домен чей» нет. Поэтому связь задаёт человек, и
+// эти группы стоят уровнем выше автогрупп.
+//
+// Это по-прежнему ТОЛЬКО ВИД. Файл lists/domain-groups.txt не читает движок,
+// и каждая строка таблицы уходит в API со своим сырым ключом, как и раньше.
+//
+// Формат — секции:  [Имя] и по домену на строку; # — комментарий. Сервер
+// проверяет файл при записи (domain_groups_save в actions.sh), здесь разбор
+// снисходительный: файл могли поправить руками, и одна кривая строка не
+// должна гасить все группы — она просто пропускается.
+
+// Разбор с номерами строк: редактор группы меняет ровно её секцию и не трогает
+// комментарии и порядок остального файла.
+export function domainGroupSections(text) {
+  const lines = String(text == null ? "" : text).split("\n");
+  const sections = [];
+  let cur = null;
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (t.length > 2 && t[0] === "[" && t[t.length - 1] === "]") {
+      const name = t.slice(1, -1).trim();
+      if (!name) continue;
+      if (cur) cur.end = i;
+      cur = { name, start: i, end: lines.length, domains: [] };
+      sections.push(cur);
+      continue;
+    }
+    if (!cur || !t || t[0] === "#") continue;
+    cur.domains.push(t.toLowerCase());
+  }
+  return { lines, sections };
+}
+
+// Домен → номер группы. Первая секция выигрывает при повторе: сервер повтор не
+// пропускает, а на файле, поправленном руками, выбор обязан быть устойчивым.
+export function domainGroupIndex(sections) {
+  const index = new Map();
+  sections.forEach((s, i) => s.domains.forEach(d => { if (!index.has(d)) index.set(d, i); }));
+  return index;
+}
+
+// Номер группы для имени хоста или -1. Сравнение по окончанию, от полного
+// имени к родителю: discord.com покрывает cdn.discord.com, а самое длинное
+// совпадение выигрывает — mail.google.com в одной группе и google.com в
+// другой разводят почту и остальной Google. Так же устроены доменные списки
+// Keenetic, рядом с которыми эту разметку и ведут.
+export function matchDomainGroup(index, host) {
+  if (!index || !index.size) return -1;
+  const s = String(host == null ? "" : host).toLowerCase().replace(/\|[46]$/, "");
+  // Адрес вместо имени ни в какую группу не попадает: «4» из 1.2.3.4 совпало
+  // бы с чем угодно, а у IPv6 меток нет.
+  if (!s || s.indexOf(":") >= 0 || /^[0-9.]+$/.test(s)) return -1;
+  let rest = s;
+  for (;;) {
+    if (index.has(rest)) return index.get(rest);
+    const dot = rest.indexOf(".");
+    if (dot < 0) return -1;
+    rest = rest.slice(dot + 1);
+  }
+}
+
+// Правки файла — на уровне строк, а не сериализацией разобранного: иначе
+// любое добавление домена из таблицы стирало бы комментарии, которые человек
+// оставил руками, и переставляло бы секции.
+function dgJoin(lines) {
+  const out = lines.join("\n").replace(/\n{3,}/g, "\n\n").replace(/^\n+/, "");
+  return out && !out.endsWith("\n") ? out + "\n" : out;
+}
+
+export function domainGroupsAdd(text, name, domain) {
+  const { lines, sections } = domainGroupSections(text);
+  const d = String(domain).trim().toLowerCase();
+  const sec = sections.find(s => s.name.toLowerCase() === String(name).trim().toLowerCase());
+  if (!sec) {
+    const body = lines.slice();
+    while (body.length && !body[body.length - 1].trim()) body.pop();
+    if (body.length) body.push("");
+    body.push("[" + String(name).trim() + "]", d);
+    return dgJoin(body);
+  }
+  if (sec.domains.includes(d)) return dgJoin(lines);
+  // Перед хвостом пустых строк секции, чтобы новый домен не отрывался от
+  // остальных пустой строкой-разделителем.
+  let at = sec.end;
+  while (at > sec.start + 1 && !lines[at - 1].trim()) at--;
+  return dgJoin([...lines.slice(0, at), d, ...lines.slice(at)]);
+}
+
+// Заменить секцию целиком (имя и тело) или удалить её, если name пустое.
+export function domainGroupsReplace(text, index, name, bodyText) {
+  const { lines, sections } = domainGroupSections(text);
+  const sec = sections[index];
+  if (!sec) return dgJoin(lines);
+  const repl = name ? ["[" + name.trim() + "]", ...String(bodyText).replace(/\n+$/, "").split("\n"), ""] : [];
+  return dgJoin([...lines.slice(0, sec.start), ...repl, ...lines.slice(sec.end)]);
+}
+
+export function domainGroupsAppend(text, name, bodyText) {
+  const lines = String(text == null ? "" : text).split("\n");
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  if (lines.length) lines.push("");
+  lines.push("[" + name.trim() + "]", ...String(bodyText).replace(/\n+$/, "").split("\n"));
+  return dgJoin(lines);
+}
+
+// Проверка до отправки — с сообщениями ПРО ГРУППУ, а не про строку файла:
+// человек правит одну секцию, и «строка 37» от сервера ему ничего не скажет.
+// Сервер проверяет то же самое ещё раз; там последняя линия для правки руками.
+//
+// Регистр сравнивается через toLowerCase, то есть и для кириллицы: awk под
+// LC_ALL=C сворачивает только латиницу, и «Дискорд»/«дискорд» он пропустил бы.
+export function domainGroupProblem(sections, index, name, bodyText) {
+  const n = String(name || "").trim();
+  if (!n) return "Укажите имя группы.";
+  if (new TextEncoder().encode(n).length > 96) return "Имя группы слишком длинное.";
+  if (/[[\]]/.test(n) || Array.from(n).some(c => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127))
+    return "В имени группы нельзя использовать квадратные скобки.";
+  const other = sections.find((s, i) => i !== index && s.name.toLowerCase() === n.toLowerCase());
+  if (other) return `Группа «${other.name}» уже есть.`;
+  const taken = new Map();
+  sections.forEach((s, i) => { if (i !== index) s.domains.forEach(d => taken.set(d, s.name)); });
+  const seen = new Set();
+  for (const raw of String(bodyText).split("\n")) {
+    const t = raw.trim();
+    if (!t || t[0] === "#") continue;
+    const d = t.toLowerCase();
+    const bad = d.length > 253 || !/^[a-z0-9.-]+$/.test(d) || /^[0-9.]+$/.test(d) ||
+      d.split(".").some(l => !l || l.length > 63 || l[0] === "-" || l[l.length - 1] === "-");
+    if (bad) return `«${t}» — не домен. Укажите имя сайта без адреса, протокола и пути.`;
+    if (taken.has(d)) return `${d} уже входит в группу «${taken.get(d)}».`;
+    seen.add(d);
+  }
+  return seen.size ? "" : "Добавьте в группу хотя бы один домен.";
+}
+
+// Проверка файла целиком из режима «как текст». Сервер ловит то же, кроме
+// двойников с разным регистром кириллицы («Дискорд» и «дискорд»): awk под
+// LC_ALL=C сворачивает только латиницу. Двойник дал бы две группы, которые
+// человек считает одной, и память раскрытия, общую на обе.
+export function domainGroupsTextProblem(text) {
+  const { sections } = domainGroupSections(text);
+  const seen = new Map();
+  for (const sec of sections) {
+    const k = sec.name.toLowerCase();
+    if (seen.has(k)) return `Группа «${sec.name}» повторяет «${seen.get(k)}» — имена групп не различаются регистром.`;
+    seen.set(k, sec.name);
+  }
+  return "";
+}
+
+// Раскрытые группы — по имени, отдельно от автогрупп: ключ автогруппы
+// составной «пул|домен», и смешивать два вида ключей в одном наборе значило бы
+// однажды получить совпадение там, где его нет. Имя, а не номер: порядок секций
+// меняется, а память о раскрытии не должна переезжать на соседа.
+const UGROUP_OPEN_KEY = "z2k-state-open-ugroups";
+
+function loadOpenUgroups() {
+  try {
+    const v = JSON.parse(localStorage.getItem(UGROUP_OPEN_KEY));
+    return new Set(Array.isArray(v) ? v.filter(x => typeof x === "string") : []);
+  } catch (_) { return new Set(); }
+}
+
+export const stateOpenUgroups = loadOpenUgroups();
+
+export function saveOpenUgroups() {
+  try { localStorage.setItem(UGROUP_OPEN_KEY, JSON.stringify(Array.from(stateOpenUgroups).slice(-STATE_OPEN_MAX))); } catch (_) {}
+}

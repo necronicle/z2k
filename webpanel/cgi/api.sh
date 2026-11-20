@@ -235,7 +235,7 @@ panel_auth_gate
 # Крупные загрузки (списки, своя стратегия) идут через read_body_raw и свои
 # собственные потолки в мегабайтах — их это ограничение не касается.
 case "$PATH_INFO" in
-    /warp/list/save|/warp/devices/save|/warp/exclude/save|/whitelist/import|/strategy/pool/save|/strategy/pool/validate|/state/bulk|/whitelist/save|/extra-domains/save) ;;
+    /warp/list/save|/warp/devices/save|/warp/exclude/save|/whitelist/import|/strategy/pool/save|/strategy/pool/validate|/state/bulk|/whitelist/save|/extra-domains/save|/domain-groups/save) ;;
     *)
         if [ "${CONTENT_LENGTH:-0}" -gt "$Z2K_MAX_BODY" ] 2>/dev/null; then
             json_fail "413 Payload Too Large" "запрос слишком большой"
@@ -534,6 +534,45 @@ case "$method $path" in
             wl_error=$(cat "$wl_errfile"); rm -f "$wl_errfile"
             case "$wl_rc" in 3) wl_status="409 Conflict" ;; 2) wl_status="400 Bad Request" ;; *) wl_status="500 Internal Server Error" ;; esac
             json_fail "$wl_status" "${wl_error:-не удалось сохранить список}"
+        fi
+        ;;
+
+    # ---------- DOMAIN GROUPS ----------
+    # Группы доменов вкладки «Автоподбор» — только вид, на обход не влияют
+    # (см. DOMAIN_GROUPS_FILE в actions.sh). Форма ответа и сохранения та же,
+    # что у списков доменов: текст целиком плюс версия для compare-and-swap.
+    "GET /domain-groups")
+        mkdir -p "$(dirname "$DOMAIN_GROUPS_FILE")" || json_fail "500 Internal Server Error" "не удалось открыть группы"
+        _list_lock "$DOMAIN_GROUPS_FILE" || json_fail "409 Conflict" "группы заняты, повторите"
+        dg_rev=$(domain_groups_revision)
+        dg_text=$(cat "$DOMAIN_GROUPS_FILE" 2>/dev/null) || dg_text=""
+        _list_unlock "$DOMAIN_GROUPS_FILE"
+        [ -n "$dg_rev" ] || json_fail "500 Internal Server Error" "не удалось прочитать версию групп"
+        json_header
+        printf '{"ok":true,"revision":'
+        json_string "$dg_rev"
+        printf ',"text":'
+        json_string "$dg_text"
+        printf '}\n'
+        exit 0
+        ;;
+
+    "POST /domain-groups/save")
+        [ "${CONTENT_LENGTH:-0}" -le "$DOMAIN_GROUPS_MAX_BYTES" ] 2>/dev/null || json_fail "413 Payload Too Large" "группы занимают больше 256 КБ"
+        dg_rev=$(form_value "${QUERY_STRING:-}" revision)
+        dg_errfile=$(mktemp) || json_fail "500 Internal Server Error" "не удалось создать временный файл"
+        if dg_result=$(read_body_raw | domain_groups_save "$dg_rev" 2>"$dg_errfile"); then
+            rm -f "$dg_errfile"
+            json_header
+            printf '{"ok":true,"revision":'
+            json_string "$dg_result"
+            printf '}\n'
+            exit 0
+        else
+            dg_rc=$?
+            dg_error=$(cat "$dg_errfile"); rm -f "$dg_errfile"
+            case "$dg_rc" in 3) dg_status="409 Conflict" ;; 2) dg_status="400 Bad Request" ;; *) dg_status="500 Internal Server Error" ;; esac
+            json_fail "$dg_status" "${dg_error:-не удалось сохранить группы}"
         fi
         ;;
 
