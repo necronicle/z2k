@@ -74,8 +74,22 @@ https://help.keenetic.com/hc/ru/articles/360021214160
 
 ```bash
 opkg update
-opkg install coreutils-sort curl grep gzip ipset iptables kmod_ndms xtables-addons_legacy openssl-util
+opkg install coreutils-sort libcurl curl grep gzip ipset iptables kmod_ndms xtables-addons_legacy openssl-util
 ```
+
+Перед скачиванием установщика проверьте, что `curl` запускается вместе с библиотекой Entware.
+
+```sh
+LD_BIND_NOW=1 curl --version
+```
+
+Если появляется `undefined symbol: curl_multi_get_offt`, загрузчик нашёл библиотеку `libcurl`, в которой нет нужной функции. Даже если OPKG пишет, что `curl` уже обновлён, переустановите оба пакета из актуального индекса Entware и повторите проверку.
+
+```sh
+opkg update && opkg --force-reinstall install libcurl curl && LD_BIND_NOW=1 curl --version
+```
+
+Продолжайте установку, когда команда выведет версии `curl` и `libcurl`. Если ошибка сохранилась, для диагностики пришлите вывод `command -v curl`, `opkg list-installed | grep -E '^(libcurl|curl) '` и, если доступна команда `ldd`, вывод `ldd "$(command -v curl)" | grep libcurl`.
 
 <details>
 <summary>Если Entware не устанавливается или загрузка пакетов зависает</summary>
