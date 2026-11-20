@@ -3107,14 +3107,16 @@ input[type="checkbox"] { accent-color: var(--accent); }
   .wl-selection [role="status"] { flex-basis: 100%; margin-left: 0; }
   .wl-bulk-list .wl-row { min-height: 36px; }
 }
-.wl-search input, .wl-editor textarea {
+/* Поле списка в окне «Добавить в группу» — того же вида: у textarea нет
+   оформления по умолчанию, и в тёмной теме оно выходило белым пятном. */
+.wl-search input, .wl-editor textarea, textarea.ug-assign-list {
   background: var(--bg); color: var(--text); border: 1px solid var(--border);
   border-radius: 6px; padding: 10px 12px;
 }
 .wl-search input { font-family: inherit; font-size: 14px; line-height: normal; min-height: 0; padding: 8px 12px; }
-.wl-search input:focus-visible, .wl-editor textarea:focus-visible {
+.wl-search input:focus-visible, .wl-editor textarea:focus-visible, textarea.ug-assign-list:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
 @media (max-width: 600px) {
-  .wl-search input, .wl-editor textarea { font-size: 16px; }
+  .wl-search input, .wl-editor textarea, textarea.ug-assign-list { font-size: 16px; }
 }
