@@ -73,58 +73,23 @@ https://help.keenetic.com/hc/ru/articles/360021214160
 После установки Entware выполните обновление индекса пакетов и установите зависимости:
 
 ```bash
-opkg update &&
-opkg install libcurl curl coreutils-sort grep gzip ipset iptables kmod_ndms xtables-addons_legacy openssl-util
+opkg update
+opkg install coreutils-sort curl grep gzip ipset iptables kmod_ndms xtables-addons_legacy openssl-util
 ```
-
-В списке явно указаны и `libcurl`, и `curl`. В Entware зависимость `curl` от `libcurl` задана без версии. Если библиотека уже установлена, `opkg install curl` может обновить только саму утилиту и оставить старую библиотеку.
 
 <details>
 <summary>Если Entware не устанавливается или загрузка пакетов зависает</summary>
 
-#### Если `opkg update` висит или обрывается
+Если сервер пакетов Entware недоступен из вашей сети, воспользуйтесь [офлайн-установщиком Entware](https://github.com/necronicle/entware-offline): пакеты уже находятся внутри архива. В репозитории есть варианты для разных архитектур, инструкция и контрольные суммы.
 
-У части провайдеров сервер пакетов Entware (`bin.entware.net`) обрывает загрузку на первых десятках килобайт, и `opkg` висит без конца. Возьмите пакеты через зеркало на узле проекта z2k — оно отдаёт только `bin.entware.net` и больше ничего:
-
-```bash
-sed -i 's|http://bin.entware.net|http://85.192.60.175/entware|g' /opt/etc/opkg.conf
-sed -i 's|http://213.176.74.63/entware|http://85.192.60.175/entware|g' /opt/etc/opkg.conf
-opkg update &&
-opkg install libcurl curl coreutils-sort grep gzip ipset iptables kmod_ndms xtables-addons_legacy openssl-util
-sed -i 's|http://85.192.60.175/entware|http://bin.entware.net|g' /opt/etc/opkg.conf
-```
-
-Последняя строка возвращает основной сервер в настройки `opkg`.
-
-Сам установщик z2k ставит и обновляет пакеты через узел и без этого шага.
-
-Стороннее зеркало вместо узла подойдёт, только если у вас стоит полноценный wget (пакет `wget-ssl`): встроенный в Entware busybox wget не умеет https, а по http зеркало ему отказывает.
-
-```bash
-sed -i 's|http://bin.entware.net|https://mirrors.bfsu.edu.cn/entware|g' /opt/etc/opkg.conf
-opkg update
-```
-
-Вернуть основной сервер: `sed -i 's|https://mirrors.bfsu.edu.cn/entware|http://bin.entware.net|g' /opt/etc/opkg.conf`
-
-#### Если Entware не устанавливается
-
-Официальный установщик Entware во время установки сам качает пакеты с того же `bin.entware.net`, поэтому на таких линиях установка обрывается. Для этого случая есть офлайн-установщики: официальный установщик с пакетами внутри, сеть при установке не нужна. Архивы для всех архитектур, инструкция и контрольные суммы — в репозитории [entware-offline](https://github.com/necronicle/entware-offline).
+Если Entware уже установлен, но зависимости загрузить не удалось, обратитесь в группу проекта. Менять конфигурационные файлы вручную не требуется.
 
 </details>
 
 ### 3. Установка z2k
 
-Если после установки зависимостей появляется `undefined symbol: curl_multi_get_offt`, обновите оба пакета штатной командой Entware, затем повторите установку z2k:
-
 ```bash
-opkg update && opkg install libcurl curl
-```
-
-Если ошибка сохраняется, пришлите её полный текст и версии пакетов (`opkg list-installed | grep -E '^(curl|libcurl) '`) в группу проекта.
-
-```bash
-{ /opt/bin/curl --resolve raw.githubusercontent.com:443:85.192.60.175 -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh || /opt/bin/curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh; } | sh
+{ curl --resolve raw.githubusercontent.com:443:85.192.60.175 -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh || curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k.sh; } | sh
 ```
 
 ### 4. Windows: обязательно включить TCP timestamps

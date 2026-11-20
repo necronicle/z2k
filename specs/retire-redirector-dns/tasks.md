@@ -4,7 +4,8 @@
 - [x] T2 Copy probe, check shell syntax and clipboard readback (R6).
 - [x] T3 Observe failing retirement tests (R1-R3).
 - [x] T4 Implement retirement and callers (R1-R4).
-- [x] T5 Targeted tests, complete local release suite and update rehearsal passed (R1-R5).
-- [x] T6 Signed p-88.7 published; CI/publication, raw/CDN signatures and control router verified (R5).
-
-Evidence: [verification.md](verification.md). No required work remains.
+- [ ] T5 Targeted tests passed. Initial full run: 5599 pass, 1 fail, 1 macOS skip.
+  The failure was the production-function name audit: generic `fail()` collided
+  with a test helper. Renamed it to `redirector_cleanup_fail`; targeted audit
+  and retirement tests now pass. Fresh release suite and rehearsal pending.
+- [ ] T6 Release, publish and public verification (R5).
