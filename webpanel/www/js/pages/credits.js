@@ -438,6 +438,15 @@ export function renderCredits() {
           это много значит.
         </p>
       </div>
+      <div class="card credits-card sponsor-card">
+        <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
+        <div class="credits-name">WanTBeeR</div>
+        <p class="desc">
+          WanTBeeR оплачивает токены ИИ, которые мы тратим на разработку z2k.
+          С ними разбираем логи, ищем причины сбоев и проверяем правки.
+          WanTBeeR, спасибо за токены! Они уходят в дело.
+        </p>
+      </div>
     </div>
   `;
 }
