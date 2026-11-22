@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 191,
-  "current": "p-88.11",
+  "seq": 192,
+  "current": "p-88.12",
   "install_map": {
   "common/ipt.sh": ["/opt/zapret2/common/ipt.sh"],
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
@@ -240,7 +240,7 @@
   "lib/config.sh": "48ce8a12848dc893ff8b102dc607f9079369b17132a440971dd29870ae852614",
   "lib/config_official.sh": "d82339df81f1e37098639ef9c04e4c776e80896f383228ff7c2a3c832664fbb9",
   "lib/install.sh": "a40948a691304c5a6cd641faaba29a77d0cfcecef10e4674345ffea8a0c88ee3",
-  "lib/menu.sh": "27d3ed9ba38d7d984155b70696755646e2140e51762498fc63d89b79e5eb6432",
+  "lib/menu.sh": "8833b532e7792048a869c52a9c4fd9ef55ffb47225d6af0dc44c7838143f2fc1",
   "lib/strategies.sh": "87f1ced9815120a019ef1f7f9256e212ca8e32374ea213fd1fc839e3e51fa705",
   "lib/utils.sh": "a7fbfcfb5935f3571b1849e7a60c2dc5f65479fdc65e8208e98d18c6d6a8aff4",
   "lib/wan.sh": "7f66e83516031bf66ea5f185804e0c90442507d7a75c95a7bc27f6b86d639129",
@@ -284,7 +284,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "2dfce84993baeb00f251e220fff329b4e108ffea9a47f2af15207b5787469244",
+  "webpanel/www/index.html": "cab60a20a9fc7f55cbceed8bd26d83fd1a86f90fbe21f7a4d58b22ccd36799ea",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -295,7 +295,7 @@
   "webpanel/www/js/core/toast.js": "21b8373e69aeff39e6fa2ac5f2427899786506a50ba1937da60d9ec16c6e3bf0",
   "webpanel/www/js/core/whitelist.js": "f05e2250c94649848185f6b12e45d5fb382b3ca106a773550db1675d0e830318",
   "webpanel/www/js/job.js": "b56b81ae5415563cd4789923849a480b99cfd3dfcf9cb21c3447f258c30330be",
-  "webpanel/www/js/pages/credits.js": "3dfc4c0230cbed3f6b976a4c7b5e050d8c951874ea014c2b96f5771c858adb26",
+  "webpanel/www/js/pages/credits.js": "bf4fe740199065fb18773f607296dcedfe7d9eb6d1c843fb4414dfe921a7ca0e",
   "webpanel/www/js/pages/dashboard.js": "4eff0ff0a6e031515974c4402fcfb2fb280c1327ed3bf931644a30d9816d6ae9",
   "webpanel/www/js/pages/diag.js": "01e1d83a7f2d500a9349d714beabdcac1f4a74c6878540d35a0b25a15b4ccaec",
   "webpanel/www/js/pages/exclude.js": "aea5eb43aa4e3759fcdd7356b88dd016a2e8bf1160de2c624555147ca412fadd",
@@ -672,6 +672,7 @@
 {"v": "p-88.7", "type": "patch", "ts": "2026-11-17T21:15:20Z", "ref": "p-88.7", "desc": "Удалена статическая подмена DNS для redirector.googlevideo.com. Обновление автоматически очищает старые записи этого имени в Keenetic; остальные настройки DNS сохраняются.", "changed_files": ["webpanel/www/index.html", "files/z2k-redirector-ip-refresh.sh", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/install.sh", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-88.8", "type": "patch", "ts": "2026-11-20T09:14:30Z", "ref": "p-88.8", "desc": "Добавлена благодарность WanTBeeR за оплату токенов ИИ для разработки z2k.", "changed_files": ["webpanel/www/index.html", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-88.10", "type": "patch", "ts": "2026-11-22T12:16:25Z", "ref": "p-88.10", "desc": "Видеокэши c.youtube.com снова используют обычные TCP-стратегии YouTube. В веб-панель добавлена благодарность Kurdt_Kobain за поддержку проекта, а в README возвращена команда полной зачистки zapret и zapret2.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lists/extra_strats/TCP/YT_GV/List.txt", "files/z2k-geosite.sh", "lib/config_official.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "z2k-detect/builds/z2k-detect-linux-386", "z2k-detect/builds/z2k-detect-linux-amd64", "z2k-detect/builds/z2k-detect-linux-arm", "z2k-detect/builds/z2k-detect-linux-arm64", "z2k-detect/builds/z2k-detect-linux-mips", "z2k-detect/builds/z2k-detect-linux-mips64le", "z2k-detect/builds/z2k-detect-linux-mipsle", "z2k-detect/builds/z2k-detect-linux-ppc64", "z2k-detect/builds/z2k-detect-linux-riscv64", "UPDATES.json"], "steps": ["regen-config", "validate-config", "refresh-binaries", "restart-service"], "full_install": false},
-{"v": "p-88.11", "type": "patch", "ts": "2026-11-22T14:20:57Z", "ref": "p-88.11", "desc": "Для Instagram, WhatsApp и Facebook CDN роутер сохраняет все проверенные адреса и ищет отдельную рабочую замену для каждого недоступного. В дополнительные домены добавлен blockme.site. Видеокэши c.youtube.com по-прежнему используют обычные стратегии YouTube.", "changed_files": ["webpanel/www/index.html", "files/lists/extra-domains.txt", "files/z2k-insta-ip-refresh.sh", "lib/install.sh", "lib/menu.sh", "UPDATES.json"], "steps": [], "full_install": false}
+{"v": "p-88.11", "type": "patch", "ts": "2026-11-22T14:20:57Z", "ref": "p-88.11", "desc": "Для Instagram, WhatsApp и Facebook CDN роутер сохраняет все проверенные адреса и ищет отдельную рабочую замену для каждого недоступного. В дополнительные домены добавлен blockme.site. Видеокэши c.youtube.com по-прежнему используют обычные стратегии YouTube.", "changed_files": ["webpanel/www/index.html", "files/lists/extra-domains.txt", "files/z2k-insta-ip-refresh.sh", "lib/install.sh", "lib/menu.sh", "UPDATES.json"], "steps": [], "full_install": false},
+{"v": "p-88.12", "type": "patch", "ts": "2026-11-22T18:02:29Z", "ref": "p-88.12", "desc": "Добавили Сергея в благодарности за поддержку z2k.", "changed_files": ["webpanel/www/index.html", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": [], "full_install": false}
   ]
 }
