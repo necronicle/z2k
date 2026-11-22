@@ -1939,6 +1939,7 @@ dns_check_own_read() {
 
 dns_check_own_save() {
     local tmp="${DNS_CHECK_OWN}.new.$$" kept=0 dropped=0 line
+    local _ok _pre _kind _rest _hp _path _h _p _has_p _r4 _o _ng _cc _r6 _g _rd _lbl
     mkdir -p "$(dirname "$DNS_CHECK_OWN")" 2>/dev/null
     : > "$tmp" || return 1
     # `|| [ -n "$line" ]` — БЕЗ НЕГО ТЕРЯЕТСЯ ПОСЛЕДНЯЯ СТРОКА.
@@ -1952,30 +1953,106 @@ dns_check_own_save() {
     while IFS= read -r line || [ -n "$line" ]; do
         line=$(printf '%s' "$line" | tr -d ' \t\r')
         case "$line" in ''|'#'*) continue ;; esac
+        _ok=0; _pre=1; _kind=""; _h=""; _p=""; _has_p=0
         case "$line" in
             https://*)
-                printf '%s\n' "$line" >> "$tmp"; kept=$((kept + 1)) ;;
+                case "$line" in
+                    *[!][A-Za-z0-9._~:/?+=%-]*) _pre=0 ;;
+                    *)
+                        _rest="${line#https://}"
+                        _hp="${_rest%%/*}"
+                        case "$_rest" in
+                            */*) _path="/${_rest#*/}" ;;
+                            *)   _path="" ;;
+                        esac
+                        case "$_path" in *\[*|*\]*) _pre=0 ;; esac
+                        case "$_hp" in
+                            \[*\]:*) _p="${_hp##*\]:}"; _h="${_hp%\]:*}"; _h="${_h#\[}"; _has_p=1; _kind=v6only ;;
+                            \[*\])   _h="${_hp#\[}"; _h="${_h%\]}"; _kind=v6only ;;
+                            *\[*|*\]*|*:*:*) _pre=0 ;;
+                            *:*)     _p="${_hp#*:}"; _h="${_hp%%:*}"; _has_p=1; _kind=host ;;
+                            *)       _h="$_hp"; _kind=host ;;
+                        esac
+                        if [ "$_pre" = 1 ] && [ "$_has_p" = 1 ]; then
+                            case "$_p" in
+                                ''|*[!0-9]*|0*) _pre=0 ;;
+                                *) [ "${#_p}" -le 5 ] && [ "$_p" -ge 1 ] && [ "$_p" -le 65535 ] || _pre=0 ;;
+                            esac
+                        fi ;;
+                esac ;;
             # DoT: z2k-dns-check.sh разбирает `dot:ИМЯ` и стучится на ИМЯ:853.
             # Раньше строка падала в ветку ниже как «не адрес», и каждое
             # «Сохранить» стирало то, что человек дописал в файл руками.
-            # Имя уходит в openssl аргументом, поэтому пускаем только буквы,
-            # цифры, точку и дефис, без дефиса в начале и без пустых меток.
+            # Пускаем доменное имя, IPv4 или IPv6.
             dot:*)
-                case "${line#dot:}" in
-                    *[!A-Za-z0-9.-]*|-*|.*|*.|*..*)
-                        dropped=$((dropped + 1)) ;;
-                    *.*)
-                        printf '%s\n' "$line" >> "$tmp"; kept=$((kept + 1)) ;;
-                    *)
-                        dropped=$((dropped + 1)) ;;
-                esac ;;
-            *[!0-9.]*)
-                dropped=$((dropped + 1)) ;;
-            *.*.*.*)
-                printf '%s\n' "$line" >> "$tmp"; kept=$((kept + 1)) ;;
+                _h="${line#dot:}"; _kind=any ;;
             *)
-                dropped=$((dropped + 1)) ;;
+                _h="$line"; _kind=ip ;;
         esac
+        if [ "$_pre" = 1 ] && [ -n "$_h" ]; then
+            case "$_h" in
+                *:*)
+                    if [ "$_kind" != host ]; then
+                        case "$_h" in
+                            *[!0-9A-Fa-f:]*|*:*:*:*:*:*:*:*:*:*:*|*:::*|*::*::*|:[!:]*|*[!:]:) _ok=0 ;;
+                            *)
+                                _ok=1; _ng=0; _cc=0
+                                case "$_h" in *::*) _cc=1 ;; esac
+                                _r6="$_h:"
+                                while [ -n "$_r6" ]; do
+                                    _g="${_r6%%:*}"; _r6="${_r6#*:}"
+                                    if [ -n "$_g" ]; then
+                                        _ng=$((_ng + 1))
+                                        [ "${#_g}" -le 4 ] || { _ok=0; break; }
+                                    fi
+                                done
+                                if [ "$_cc" = 1 ]; then
+                                    [ "$_ng" -ge 1 ] && [ "$_ng" -le 7 ] || _ok=0
+                                else
+                                    [ "$_ng" -eq 8 ] || _ok=0
+                                fi ;;
+                        esac
+                    fi ;;
+                *[!0-9.]*)
+                    if [ "$_kind" = host ] || [ "$_kind" = any ]; then
+                        case "$_h" in
+                            *[!A-Za-z0-9.-]*|-*|*-|.*|*.|*..*|*-.*|*.-*) _ok=0 ;;
+                            *.*)
+                                case "${_h##*.}" in
+                                    *[!0-9]*)
+                                        if [ "${#_h}" -le 253 ]; then
+                                            _ok=1; _rd="$_h."
+                                            while [ -n "$_rd" ]; do
+                                                _lbl="${_rd%%.*}"; _rd="${_rd#*.}"
+                                                if [ -z "$_lbl" ] || [ "${#_lbl}" -gt 63 ]; then
+                                                    _ok=0; break
+                                                fi
+                                            done
+                                        fi ;;
+                                esac ;;
+                        esac
+                    fi ;;
+                *.*.*.*.*|.*|*.|*..*)
+                    _ok=0 ;;
+                *.*.*.*)
+                    if [ "$_kind" != v6only ]; then
+                        _ok=1; _r4="$_h."
+                        while [ -n "$_r4" ]; do
+                            _o="${_r4%%.*}"; _r4="${_r4#*.}"
+                            case "$_o" in ''|0?*) _ok=0; break ;; esac
+                            if [ "${#_o}" -gt 3 ] || [ "$_o" -gt 255 ]; then
+                                _ok=0; break
+                            fi
+                        done
+                    fi ;;
+            esac
+        fi
+        if [ "$_ok" = 1 ]; then
+            printf '%s\n' "$line" >> "$tmp"
+            kept=$((kept + 1))
+        else
+            dropped=$((dropped + 1))
+        fi
     done
     mv -f "$tmp" "$DNS_CHECK_OWN" && chmod 644 "$DNS_CHECK_OWN"
     printf 'entries=%s dropped=%s\n' "$kept" "$dropped"

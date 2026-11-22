@@ -44,12 +44,69 @@ ControlD|76.76.2.0|https://freedns.controld.com/p0|p0.freedns.controld.com"
 
 # --- примитивы ----------------------------------------------------------------
 
+_is_ipv4() {
+    case "${1:-}" in
+        ''|*[!0-9.]*|.*|*.|*..* ) return 1 ;;
+        *.*.*.*.*) return 1 ;;
+        *.*.*.*) ;;
+        *) return 1 ;;
+    esac
+    _v4_r="$1."
+    while [ -n "$_v4_r" ]; do
+        _v4_o="${_v4_r%%.*}"; _v4_r="${_v4_r#*.}"
+        case "$_v4_o" in ''|0?*) return 1 ;; esac
+        [ "${#_v4_o}" -le 3 ] && [ "$_v4_o" -le 255 ] || return 1
+    done
+    return 0
+}
+
+_is_ipv6() {
+    case "${1:-}" in
+        ''|*[!0-9A-Fa-f:]*|*:*:*:*:*:*:*:*:*:*:*|*:::*|*::*::*|:[!:]*|*[!:]:) return 1 ;;
+        *:*) ;;
+        *) return 1 ;;
+    esac
+    _v6_ng=0; _v6_cc=0
+    case "$1" in *::*) _v6_cc=1 ;; esac
+    _v6_r="$1:"
+    while [ -n "$_v6_r" ]; do
+        _v6_g="${_v6_r%%:*}"; _v6_r="${_v6_r#*:}"
+        if [ -n "$_v6_g" ]; then
+            _v6_ng=$((_v6_ng + 1))
+            [ "${#_v6_g}" -le 4 ] || return 1
+        fi
+    done
+    if [ "$_v6_cc" = 1 ]; then
+        [ "$_v6_ng" -ge 1 ] && [ "$_v6_ng" -le 7 ]
+    else
+        [ "$_v6_ng" -eq 8 ]
+    fi
+}
+
+_is_ipv6_scoped() {
+    case "$1" in
+        *%*)
+            _v6s_a="${1%%%*}"
+            _v6s_z="${1#*%}"
+            case "$_v6s_z" in
+                ''|*'%'*|*[!A-Za-z0-9._-]*) return 1 ;;
+            esac
+            case "$_v6s_a" in
+                [Ff][Ee][89AaBb][0-9A-Fa-f]:*) _is_ipv6 "$_v6s_a" ;;
+                *) return 1 ;;
+            esac
+            ;;
+        *) _is_ipv6 "$1" ;;
+    esac
+}
+
 # udp_a СЕРВЕР ДОМЕН — адреса A через nslookup, по одному в строке.
 # Ответ самого резолвера (первые строки Server/Address) отбрасываем: нас
 # интересуют только адреса ответа, иначе адрес сервера попал бы в статистику
 # повторов и был бы объявлен заглушкой.
 udp_a() {
-    _ua=$(nslookup "$2" "$1" 2>/dev/null); _ur=$?
+    _ua_srv="${1#\[}"; _ua_srv="${_ua_srv%\]}"
+    _ua=$(nslookup "$2" "$_ua_srv" 2>/dev/null); _ur=$?
     # nslookup может завершиться ошибкой на NXDOMAIN: это ответ без A,
     # в отличие от таймаута. Не выдаём ошибку транспорта за пустой ответ.
     if [ "$_ur" -ne 0 ]; then
@@ -58,7 +115,7 @@ udp_a() {
     printf '%s\n' "$_ua" | awk '
         /^Name:/ { inans = 1; next }
         inans && /^Address/ {
-            ip = $3
+            ip = ($1 == "Address:" ? $2 : $3)
             if (ip ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) print ip
         }'
 }
@@ -73,8 +130,10 @@ udp_a() {
 # время ПОСЛЕДНЕЙ попытки — на потерянном пакете это выглядело бы как быстрый
 # сервер после двух секунд ожидания.
 udp_ms() {
+    _srv="${1#\[}"
+    _srv="${_srv%\]}"
     if command -v dig >/dev/null 2>&1; then
-        dig +time="$TIMEOUT" +tries=1 +noall +stats @"$1" "$2" A 2>/dev/null \
+        dig +time="$TIMEOUT" +tries=1 +noall +stats @"$_srv" "$2" A 2>/dev/null \
             | sed -n 's/^;; Query time: \([0-9][0-9]*\) msec.*/\1/p' | head -1
         return 0
     fi
@@ -95,7 +154,7 @@ udp_ms() {
     # против 28 у dig на том же сервере.
     for _dd in /opt/sbin /opt/bin "${ZAPRET2_DIR:-/opt/zapret2}"; do
         if [ -x "$_dd/z2k-detect" ]; then
-            "$_dd/z2k-detect" dnsms -server "$1" -name "$2" \
+            "$_dd/z2k-detect" dnsms -server "$_srv" -name "$2" \
                 -timeout "${TIMEOUT}s" 2>/dev/null | head -1
             return 0
         fi
@@ -122,10 +181,23 @@ _wire_query() {
 _resolve_set() {   # _resolve_set URL IP -> _RIP пуст, если адреса нет
     _RIP=""; _RH=""; _RP=443
     [ -n "${2:-}" ] || return 0
-    case "$2" in *[!0-9.]*) return 0 ;; esac
+    _rs_ip="${2#\[}"; _rs_ip="${_rs_ip%\]}"
+    if _is_ipv4 "$_rs_ip"; then
+        _RIP="$_rs_ip"
+    elif _is_ipv6 "$_rs_ip"; then
+        _RIP="[$_rs_ip]"
+    else
+        return 0
+    fi
     _RH=${1#*://}; _RH=${_RH%%/*}
-    case "$_RH" in *:*) _RP=${_RH##*:}; _RH=${_RH%%:*} ;; esac
-    _RIP="$2"
+    case "$_RH" in
+        \[*\]:*) _RP=${_RH##*\]:}; _RH="${_RH%\]:*}]" ;;
+        \[*\]) ;;
+        *:*:*) _RIP=""; return 0 ;;
+        *:*) _RP=${_RH##*:}; _RH=${_RH%%:*} ;;
+    esac
+    case "$_RP" in ''|*[!0-9]*) _RIP=""; return 0 ;; esac
+    [ -n "$_RH" ] || _RIP=""
 }
 
 doh_wire_a() {
@@ -133,7 +205,7 @@ doh_wire_a() {
     [ -n "$_wq" ] || return 1
     _wf="/tmp/.z2k-dns-wa.$$"
     _resolve_set "$1" "${3:-}"
-    _wc=$(curl -q -s -o "$_wf" --max-time "$TIMEOUT" -w '%{http_code}' ${_RIP:+--resolve} ${_RIP:+"$_RH:$_RP:$_RIP"} \
+    _wc=$(curl -q -g -s -o "$_wf" --max-time "$TIMEOUT" -w '%{http_code}' ${_RIP:+--resolve} ${_RIP:+"$_RH:$_RP:$_RIP"} \
           -H 'accept: application/dns-message' "$1?dns=$_wq" 2>/dev/null) || { rm -f "$_wf"; return 1; }
     [ "$_wc" = "200" ] || { rm -f "$_wf"; return 1; }
     dns_file_a "$_wf"
@@ -183,7 +255,7 @@ doh_wire_ms() {
     [ -n "$_wq" ] || return 1
     _wf="/tmp/.z2k-dns-wire.$$"
     _resolve_set "$1" "${2:-}"
-    _wt=$(curl -q -s -o "$_wf" --max-time "$TIMEOUT" -w '%{time_total} %{http_code}' ${_RIP:+--resolve} ${_RIP:+"$_RH:$_RP:$_RIP"} \
+    _wt=$(curl -q -g -s -o "$_wf" --max-time "$TIMEOUT" -w '%{time_total} %{http_code}' ${_RIP:+--resolve} ${_RIP:+"$_RH:$_RP:$_RIP"} \
           -H 'accept: application/dns-message' "$1?dns=$_wq" 2>/dev/null) || { rm -f "$_wf"; return 1; }
     case "$_wt" in
         *" 200") ;;
@@ -200,21 +272,43 @@ doh_wire_ms() {
 # usleep даёт шаг 10 мс; без него время не публикуем.
 dot_alive() {
     DOT_ADDRESSES=""
+    [ -n "${1:-}" ] || return 2
+    _host="${1#\[}"; _host="${_host%\]}"
+    [ -n "$_host" ] || return 2
     command -v openssl >/dev/null 2>&1 || return 2
     _dh=$(openssl s_client -help 2>&1)
-    _nameflag=-verify_hostname; _sni="$1"
-    case "$1" in
-        *[!0-9.]*|'') ;;
-        *) _nameflag=-verify_ip; _sni="" ;;
-    esac
+    _nameflag=-verify_hostname; _sni="$_host"
+    if _is_ipv4 "$_host" || _is_ipv6_scoped "$_host"; then
+        _nameflag=-verify_ip; _sni=""
+    fi
     for _flag in -verify_return_error "$_nameflag" -servername; do
         case "$_dh" in *"$_flag"*) ;; *) return 2 ;; esac
     done
+    _cafile=""
+    case "$_dh" in
+        *-CAfile*)
+            if [ -n "${Z2K_DNS_CAFILE:-}" ]; then
+                [ -s "$Z2K_DNS_CAFILE" ] && _cafile="$Z2K_DNS_CAFILE"
+            else
+                for _cand in /opt/etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt; do
+                    if [ -s "$_cand" ]; then _cafile="$_cand"; break; fi
+                done
+            fi ;;
+    esac
+    _conn="${2:-$_host}"
+    _conn="${_conn#\[}"; _conn="${_conn%\]}"
+    [ -n "$_conn" ] || _conn="$_host"
+    if _is_ipv6_scoped "$_conn"; then
+        _conn="[$_conn]:853"
+    else
+        _conn="$_conn:853"
+    fi
     _df="/tmp/.z2k-dns-dot.$$"
     rm -f "$_df"
     printf '\000\035\253\315\001\000\000\001\000\000\000\000\000\000\007example\003com\000\000\001\000\001' \
-        | openssl s_client -quiet -verify_return_error "$_nameflag" "$1" \
-            -connect "${2:-$1}:853" ${_sni:+-servername} ${_sni:+"$_sni"} >"$_df" 2>/dev/null &
+        | openssl s_client -quiet ${_cafile:+-CAfile} ${_cafile:+"$_cafile"} \
+            -verify_return_error "$_nameflag" "${_host%%%*}" \
+            -connect "$_conn" ${_sni:+-servername} ${_sni:+"$_sni"} >"$_df" 2>/dev/null &
     _dpid=$!
     _fine=1
     command -v usleep >/dev/null 2>&1 || _fine=0
@@ -265,7 +359,12 @@ _say() {
 }
 
 current_resolver() {
-    sed -n 's/^nameserver[[:space:]]*\([0-9.]*\).*/\1/p' /etc/resolv.conf 2>/dev/null | head -1
+    sed -n 's/#.*//; s/^[[:space:]]*nameserver[[:space:]]*\([^[:space:]]*\).*/\1/p' "${Z2K_DNS_RESOLV_CONF:-/etc/resolv.conf}" 2>/dev/null | while IFS= read -r _cr; do
+        if _is_ipv4 "$_cr" || _is_ipv6_scoped "$_cr"; then
+            printf '%s\n' "$_cr"
+            break
+        fi
+    done
 }
 
 # Запись: сервер, путь, домен, исход, множество A, оператор, назначение. Неизвестные
@@ -419,7 +518,7 @@ $line|$line||" ;;
     _cur=$(current_resolver); CURRENT_ADDR=""
     if [ -n "$_cur" ]; then
         case "$_cur" in
-            127.*) CURRENT_ADDR="Резолвер роутера ($_cur)" ;;
+            127.*|::1) CURRENT_ADDR="Резолвер роутера ($_cur)" ;;
             *) CURRENT_ADDR="Ваш DNS ($_cur)" ;;
         esac
         servers="$servers
@@ -430,7 +529,8 @@ $CURRENT_ADDR|$_cur||"
         _op=""
         # Только встроенные записи имеют известную независимость операторов.
         if printf '%s\n' "$DEFAULT_SERVERS" | grep -F -x -q "$name|$udp|$doh|$dot"; then _op="$name"; fi
-        _sip=""; case "$udp" in ''|*[!0-9.]*) ;; *) _sip="$udp" ;; esac
+        _sip=""
+        if _is_ipv4 "$udp" || _is_ipv6 "$udp"; then _sip="$udp"; fi
         ums=""; dms=""; tms=""; st_t=none; st_yt=none
         for d in $TARGETS; do
             [ -z "$udp" ] || observe "$name" u "$udp" "$d" "" "$_op"
