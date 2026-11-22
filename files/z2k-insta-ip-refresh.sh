@@ -273,9 +273,12 @@ ranges_for_host() {
     esac
 }
 
+probe_dir=$(mktemp -d) || exit 1
+: > "$probe_dir/failed"
+
 filter_by_ranges() {
     # $1 - строки "хост адрес", $2 - файл диапазонов
-    printf '%s\n' "$1" | awk -v rf="$2" '
+    printf '%s\n' "$1" | awk -v rf="$2" -v failures="${3:-}" '
         function ip2n(s,  a) { split(s, a, "."); return ((a[1]*256+a[2])*256+a[3])*256+a[4] }
         BEGIN {
             n = 0
@@ -293,7 +296,10 @@ filter_by_ranges() {
                 if (int(v / d) == int(net[i] / d)) { ok = 1; break }
             }
             if (ok) print
-            else print "REJECT\t" $1 "\t" $2 > "/dev/stderr"
+            else {
+                print "REJECT\t" $1 "\t" $2 > "/dev/stderr"
+                if (failures != "") print $1, $2 >> failures
+            }
         }' 2>>"$LOG"
 }
 
@@ -311,7 +317,7 @@ for _rf in "$META_RANGES" "$CF_RANGES"; do
         [ "$(ranges_for_host "$_h")" = "$_rf" ] && printf '%s %s\n' "$_h" "$_ip"
     done)
     [ -n "$_subset" ] || continue
-    _keep=$(filter_by_ranges "$_subset" "$_rf")
+    _keep=$(filter_by_ranges "$_subset" "$_rf" "$probe_dir/failed")
     [ -n "$_keep" ] && filtered=$(printf '%s\n%s' "$filtered" "$_keep")
 done
 filtered=$(printf '%s\n' "$filtered" | grep -c . >/dev/null 2>&1 && printf '%s\n' "$filtered" | grep . || true)
@@ -351,7 +357,6 @@ fi
 # прежние записи останутся нетронутыми (см. filter_alive ниже).
 PROBE_TIMEOUT="${Z2K_IP_PROBE_TIMEOUT:-3}"
 PROBE_MAX_TRY="${Z2K_IP_PROBE_MAX_TRY:-0}"
-PROBE_KEEP="${Z2K_IP_PROBE_KEEP:-2}"
 
 # У c10r сертификат *.instagram.com не покрывает две метки перед доменом.
 # Только для этого имени проверяем доступность без проверки сертификата,
@@ -396,7 +401,6 @@ probe_ip_alive() {   # host ip
     fi
 }
 
-probe_dir=$(mktemp -d) || exit 1
 : > "$probe_dir/working"
 : > "$probe_dir/tried"
 # First collect directly verified pairs for every name, including later donors.
@@ -407,6 +411,7 @@ filter_alive() {
             printf '%s %s\n' "$host" "$ip" >> "$probe_dir/working"
         else
             verdict=$?
+            printf '%s %s\n' "$host" "$ip" >> "$probe_dir/failed"
             log "проба не прошла: $host $ip"
             # A transport failure says nothing about which service the IP hosts.
             # Retry it in pass two if another host independently confirms the IP.
@@ -424,10 +429,15 @@ done
 changes=0
 touched_ips=""
 for h in $HOSTS; do
-    new_ips=$(awk -v h="$h" -v limit="$PROBE_KEEP" '$1==h && n++ < limit {print $2}' "$probe_dir/working")
-    set -- $new_ips
-    count=$#
-    if [ "$count" -lt "$PROBE_KEEP" ] && [ "${Z2K_IP_PROBE:-1}" = 1 ] && [ -s "$(ranges_for_host "$h")" ]; then
+    new_ips=$(awk -v h="$h" '$1==h {print $2}' "$probe_dir/working")
+    if [ "${Z2K_IP_PROBE:-1}" != 1 ]; then
+        # Preserve the old limit only in the explicit, unverified mode.
+        new_ips=$(printf '%s\n' "$new_ips" | head -n "${Z2K_IP_PROBE_KEEP:-2}")
+    fi
+    missing=$(awk -v h="$h" '$1==h && !seen[$2]++ {n++} END {print n+0}' "$probe_dir/failed")
+    # A missing VPS answer still needs one usable address to restore this name.
+    if [ -z "$new_ips" ] && [ "$missing" -eq 0 ]; then missing=1; fi
+    if [ "$missing" -gt 0 ] && [ "${Z2K_IP_PROBE:-1}" = 1 ] && [ -s "$(ranges_for_host "$h")" ]; then
         candidates=$(awk -v h="$h" 'FILENAME==ARGV[1] {if ($1==h) seen[$2]=1; next}
             !seen[$2]++ {print h, $2}' "$probe_dir/tried" "$probe_dir/working")
         for ip in $(filter_by_ranges "$candidates" "$(ranges_for_host "$h")" | awk '{print $2}'); do
@@ -439,8 +449,8 @@ for h in $HOSTS; do
             fi
             new_ips="${new_ips:+$new_ips }$ip"
             log "резерв: $h $ip"
-            count=$((count + 1))
-            [ "$count" -lt "$PROBE_KEEP" ] || break
+            missing=$((missing - 1))
+            [ "$missing" -gt 0 ] || break
         done
     fi
     if [ -z "$new_ips" ]; then

@@ -31,8 +31,8 @@ case "$h/$ip" in
     api.instagram.com/57.144.10.2)
         if [ ! -e "$fixture/api-ready" ]; then touch "$fixture/api-ready"; exit 28; fi
         printf '301 https://api.instagram.com/robots.txt/' ;;
-    graph.instagram.com/57.144.10.[12]) echo '{"type":"IGApiException"}' > "$out"; printf 400 ;;
-    web.whatsapp.com/57.144.10.[23]) echo 'Allow: /accept*' > "$out"; printf 200 ;;
+    graph.instagram.com/57.144.10.[1-7]) echo '{"type":"IGApiException"}' > "$out"; printf 400 ;;
+    web.whatsapp.com/57.144.10.[23567]) echo 'Allow: /accept*' > "$out"; printf 200 ;;
     scontent.xx.fbcdn.net/57.144.10.2) echo 'Unsigned URL' > "$out"; printf 403 ;;
     static.xx.fbcdn.net/*) echo 'wrong file' > "$out"; printf 200 ;;
     *) printf 404 ;;
@@ -89,6 +89,19 @@ if grep -Fq 'no ip host graph.instagram.com 57.144.10.1' "$fixture/actions"; the
 : > "$fixture/actions"
 run
 [ ! -s "$fixture/actions" ]
+# Mixed pool: keep four native IPs, replace each of two failures once.
+# A repeated bad IP is still one failure; a healthy donor needs no fallback.
+cp "$fixture/response" "$fixture/original-response"
+cat > "$fixture/response" <<'JSON'
+{"results":{"graph.instagram.com":["57.144.10.1","57.144.10.2","57.144.10.3","57.144.10.4","57.144.10.8","57.144.10.8","57.144.10.9"],"web.whatsapp.com":["57.144.10.6","57.144.10.7","57.144.10.5"],"api.instagram.com":["57.144.10.2"]}}
+JSON
+: > "$fixture/probes"
+run
+for suffix in 1 2 3 4 6 7; do has graph.instagram.com "57.144.10.$suffix"; done
+[ "$(grep -c '^ip host graph.instagram.com ' "$fixture/records")" = 6 ]
+[ "$(grep -c '^api.instagram.com:' "$fixture/probes")" = 1 ]
+if grep -Fxq 'graph.instagram.com:443:57.144.10.5' "$fixture/probes"; then exit 1; fi
+mv "$fixture/original-response" "$fixture/response"
 # A failed write must not remove the only existing address.
 echo 'ip host instagram.com 57.144.10.2' > "$fixture/reject"
 echo 'ip host instagram.com 57.144.10.8' > "$fixture/records"
