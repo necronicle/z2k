@@ -58,6 +58,7 @@ func (s *Service) init() {
 		s.Now = time.Now
 	}
 }
+
 // The c.youtube.com cache uses yt_tcp. A shared IP may still qualify through
 // an independent googlevideo.com answer, so keep already published addresses.
 func youtubeCacheName(name string) bool {

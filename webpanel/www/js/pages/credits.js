@@ -450,6 +450,12 @@ export function renderCredits() {
       <div class="card credits-card sponsor-card">
         <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
         <div class="credits-name">Kurdt_Kobain</div>
+        <p class="desc">
+          Kurdt_Kobain, спасибо за поддержку z2k! Первый рифф Smells Like Teen Spirit
+          узнаёшь за секунду. Хочется, чтобы и ролик с ним запускался так же быстро.
+          Твой вклад помогает нам проверять обновления на настоящих Keenetic и
+          разбираться, почему вместо любимого концерта на экране крутится кружок.
+        </p>
       </div>
     </div>
   `;
