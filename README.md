@@ -213,10 +213,8 @@ netsh interface tcp set global timestamps=disabled
 
 Выполните в терминале Entware на роутере:
 
-```sh
-url=https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k_cleanup.sh
-f=/tmp/z2k_cleanup.sh
-{ /opt/bin/curl --resolve raw.githubusercontent.com:443:85.192.60.175 -fsSL "$url" -o "$f" || /opt/bin/curl -fsSL "$url" -o "$f"; } && sh "$f"
+```bash
+{ curl --resolve raw.githubusercontent.com:443:85.192.60.175 -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k_cleanup.sh || curl -fsSL https://raw.githubusercontent.com/necronicle/z2k/z2k-enhanced/z2k_cleanup.sh; } | sh
 ```
 
 ## Документация
