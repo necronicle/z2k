@@ -3019,7 +3019,8 @@ z2k_udp_masquerade_fix_stop()
 # ==============================================================================
 # DNS YOUTUBE И GOOGLE PLAY (z2k-detect gvsub)
 # ==============================================================================
-# Ответы DNS googlevideo, gvt1 и c.youtube.com публикуются для preflight.
+# Наблюдаем DNS видеокэшей и Google Play. Адреса из ответов c.youtube.com
+# сами по себе не включают preflight.
 # Узлы вне сетей Google исключаются из preflight.
 # --queue-bypass сохраняет DNS при остановленной службе.
 Z2K_GVSUB_BIN="${Z2K_GVSUB_BIN:-/opt/sbin/z2k-detect}"

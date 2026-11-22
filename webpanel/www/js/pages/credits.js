@@ -447,6 +447,10 @@ export function renderCredits() {
           WanTBeeR, спасибо за токены! Они уходят в дело.
         </p>
       </div>
+      <div class="card credits-card sponsor-card">
+        <div class="credits-badge sponsor-badge">${_icons.heart} Спонсор проекта</div>
+        <div class="credits-name">Kurdt_Kobain</div>
+      </div>
     </div>
   `;
 }

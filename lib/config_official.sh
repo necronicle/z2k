@@ -1604,6 +1604,12 @@ generate_nfqws2_opt_from_strategies() {
         Z2K_PREFLIGHT_STEP="--in-range=a --out-range=a --payload=all --lua-desync=z2k_preflight:pos=none:pieces=1:keepts:sni=www.google.com:timeout=4:v6"
     fi
 
+    # При известном SNI кэш YouTube должен попасть в yt_tcp даже на общем
+    # с googlevideo IP или со старой строкой c.youtube.com в списке YT_GV.
+    if [ "$Z2K_REFACTOR_PHASE3" != "1" ]; then
+        add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "$wl_excl --hostlist-domains=c.youtube.com $youtube_tcp --new"
+    fi
+
     # DNS addresses identify Google video/Play in either profile layout.
     local gv_ip_tcp
     gv_ip_tcp=$(inject_z2k_preflight "$youtube_gv_tcp")
@@ -1670,7 +1676,7 @@ generate_nfqws2_opt_from_strategies() {
         add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/TCP/YT/List.txt --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt $merged_google_tls --new"
     else
         # YouTube GV — dedicated hostlist (extra_strats/TCP/YT_GV/List.txt,
-        # содержит googlevideo.com и c.youtube.com → match поддоменов: rr1-rr9,
+        # содержит googlevideo.com → match поддоменов: rr1-rr9,
         # manifest, и т.д.). Расширяется добавлением строк в файл.
         #
         # Проверка DPI отдельным соединением (lua/z2k-preflight.lua) — ТОЛЬКО
@@ -1680,9 +1686,7 @@ generate_nfqws2_opt_from_strategies() {
         # googlevideo живёт одним профилем с остальным ютубом, и шаг применялся
         # бы к именам, которым он не нужен.
         youtube_gv_tcp=$(inject_z2k_preflight "$youtube_gv_tcp")
-        # First match wins: c.youtube.com is nested under YT's youtube.com.
-        # Inline suffix also covers existing installations with an old GV list.
-        add_hostlist_line "${extra_strats_dir}/TCP/YT_GV/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt --hostlist-domains=c.youtube.com $youtube_gv_tcp --new"
+        add_hostlist_line "${extra_strats_dir}/TCP/YT_GV/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt $youtube_gv_tcp --new"
         add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "$wl_excl --hostlist-exclude=${extra_strats_dir}/TCP/YT_GV/List.txt --hostlist=${extra_strats_dir}/TCP/YT/List.txt $youtube_tcp --new"
     fi
 

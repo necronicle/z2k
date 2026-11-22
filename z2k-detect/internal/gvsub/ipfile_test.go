@@ -82,3 +82,26 @@ func TestIPFileRestoreUnion(t *testing.T) {
 		})
 	}
 }
+
+func TestYouTubeCacheDoesNotPublishGVAddress(t *testing.T) {
+	s, _, _, _ := newSvc()
+	dir := t.TempDir()
+	s.IPFile, s.StatusPath = dir+"/ips", dir+"/status"
+	const name = "RR1---SN-EXAMPLE.C.YOUTUBE.COM."
+	<-s.OnDNS(name, []netip.Addr{bad})
+	s.writeStatus()
+	restored, _, _, _ := newSvc()
+	restored.IPFile, restored.StatusPath = s.IPFile, s.StatusPath
+	if restored.Restore() != 1 {
+		t.Fatal("expected DNS observation to survive restart")
+	}
+	restored.writeIPs()
+	if got, err := os.ReadFile(s.IPFile); err != nil || string(got) != ipFileSentinels {
+		t.Fatalf("unexpected GV IP after YouTube DNS: %q (%v)", got, err)
+	}
+	<-s.OnDNS(gvName, []netip.Addr{bad})
+	<-s.OnDNS(name, []netip.Addr{bad})
+	if got, err := os.ReadFile(s.IPFile); err != nil || string(got) != ipFileSentinels+bad.String()+"\n" {
+		t.Fatalf("lost IP shared with googlevideo: %q (%v)", got, err)
+	}
+}

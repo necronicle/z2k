@@ -8,8 +8,8 @@ ZAPRET2_DIR="$TMP/router"; EXTRA="$ZAPRET2_DIR/extra_strats"; TMP_DIR="$TMP/work
 export ZAPRET2_DIR
 mkdir -p "$EXTRA/TCP/YT" "$EXTRA/TCP/YT_GV" "$EXTRA/UDP/YT" "$TMP_DIR" "$ZAPRET2_DIR/lua" "$ZAPRET2_DIR/lists"
 cp "$ROOT/files/lua/z2k-preflight.lua" "$ZAPRET2_DIR/lua/"
-# Stale GV list and polluted YT are intentional: generator must cover upgrades.
-printf 'googlevideo.com\n' > "$EXTRA/TCP/YT_GV/List.txt"
+# Keep the previously shipped GV entry until update-lists runs.
+printf 'googlevideo.com\nc.youtube.com\n' > "$EXTRA/TCP/YT_GV/List.txt"
 printf 'youtube.com\nrr1---sn-test.c.youtube.com\n' > "$EXTRA/TCP/YT/List.txt"
 printf 'youtube.com\ngooglevideo.com\n' > "$EXTRA/UDP/YT/List.txt"
 # shellcheck disable=SC1091
@@ -39,17 +39,16 @@ def matches(p,host):
 for host in ['rr1---sn-test.c.youtube.com','rr17.sn-test.c.youtube.com','c.youtube.com','rr1---sn-test.googlevideo.com','www.youtube.com']:
     tcp=[p for p in profiles if any(t.startswith('--filter-tcp=') for t in p) and matches(p,host)]
     assert tcp,host
-    p=tcp[0];video=host!='www.youtube.com'
+    p=tcp[0];video=host.endswith('.googlevideo.com')
     assert any(('key=gv_tcp' if video else 'key=yt_tcp') in t for t in p),(host,p)
     assert any('z2k_preflight:' in t for t in p)==video,host
-    if video:
-        assert not any('key=yt_tcp' in t for t in p),host
-        gvpath=next(t.split('=',1)[1] for t in p if t.startswith('--hostlist=') and '/YT_GV/' in t)
-        if 'c.youtube.com' in pathlib.Path(gvpath).read_text().splitlines():
-            assert not any(any('key=yt_tcp' in t for t in x) for x in tcp),host
+    if host.endswith('c.youtube.com'):
+        # Even if a previous DNS answer cached this IP, the SNI rule wins.
+        ip_profile=next(q for q in profiles if any(t.startswith('--ipset=') and t.endswith('/ips') for t in q))
+        assert profiles.index(p) < profiles.index(ip_profile),host
 udp=[p for p in profiles if '--filter-udp=443' in p]
 assert any(matches(p,'rr1---sn-test.c.youtube.com') and any('key=quic' in t for t in p) for p in udp),udp
-print('PASS: actual generator routes stale-list c.youtube.com to GV before YT; UDP/YT still covers it')
+print('PASS: actual generator routes c.youtube.com to YT with a stale GV list; UDP/YT still covers it')
 PY
 python3 "$TMP/check_profiles.py" "$ZAPRET2_DIR/config"
 # Real update-lists delegate, no network required. Preserve unrelated local GV entries.
@@ -62,9 +61,9 @@ printf 'youtube.com\nwww.youtube.com\ngooglevideo.com\nrr1---sn-x.googlevideo.co
 cp "$EXTRA/TCP/YT/List.txt" "$EXTRA/UDP/YT/List.txt"
 cp "$EXTRA/UDP/YT/List.txt" "$TMP/udp"
 subtract_googlevideo_from_yt
-printf 'youtube.com\nwww.youtube.com\nevilc.youtube.com\nc.youtube.com.evil\n' > "$TMP/want"
+printf 'youtube.com\nwww.youtube.com\nc.youtube.com\nrr1.sn-x.c.youtube.com\nRR2---SN-X.C.YOUTUBE.COM.\nevilc.youtube.com\nc.youtube.com.evil\n' > "$TMP/want"
 cmp "$TMP/want" "$EXTRA/TCP/YT/List.txt"
-grep -qx c.youtube.com "$EXTRA/TCP/YT_GV/List.txt"
+if grep -Fxiq c.youtube.com "$EXTRA/TCP/YT_GV/List.txt"; then exit 1; fi
 grep -qx custom.example "$EXTRA/TCP/YT_GV/List.txt"
 grep -q ': applied,' "$TMP/log"
 cmp "$TMP/udp" "$EXTRA/UDP/YT/List.txt"

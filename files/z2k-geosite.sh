@@ -802,17 +802,15 @@ apply_new_list() {
 subtract_googlevideo_from_yt() {
     # GV is shipped, not fetched from geosite. Upgrade also on 304/offline runs.
     # Preserve local additions; publish atomically and signal update-lists restart.
-    local gv_target="$EXTRA/TCP/YT_GV/List.txt" gv_filtered="$TMP_DIR/gv.filtered" domain
+    local gv_target="$EXTRA/TCP/YT_GV/List.txt" gv_filtered="$TMP_DIR/gv.filtered"
     mkdir -p "$EXTRA/TCP/YT_GV" || return 1
     if [ -f "$gv_target" ]; then
-        cat "$gv_target" > "$gv_filtered" || return 1
+        awk 'tolower($0) !~ /^(.*[.])?c[.]youtube[.]com[.]?\r?$/' "$gv_target" > "$gv_filtered" || return 1
     else
         : > "$gv_filtered" || return 1
     fi
     printf '\n' >> "$gv_filtered" || return 1
-    for domain in googlevideo.com c.youtube.com; do
-        grep -qixF "$domain" "$gv_filtered" || printf '%s\n' "$domain" >> "$gv_filtered"
-    done
+    grep -qixF googlevideo.com "$gv_filtered" || echo googlevideo.com >> "$gv_filtered" || return 1
     sed '/^$/d' "$gv_filtered" > "$TMP_DIR/gv.ready" || return 1
     if [ ! -f "$gv_target" ] || ! cmp -s "$gv_target" "$TMP_DIR/gv.ready"; then
         mv "$TMP_DIR/gv.ready" "$gv_target" || return 1
@@ -831,7 +829,6 @@ subtract_googlevideo_from_yt() {
         sub(/\r$/, "", d)
         if (d == "googlevideo.com") next
         if (d ~ /\.googlevideo\.com$/) next
-        if (tolower(d) ~ /(^|\.)c\.youtube\.com\.?$/) next
         print d
     }' "$yt_target" > "$filtered" || {
         log "YT subtract: awk failed, keeping original list"
@@ -853,10 +850,10 @@ subtract_googlevideo_from_yt() {
             log "YT subtract: rename failed"
             return 1
         }
-        log "YT: applied, removed $removed googlevideo/c.youtube.com overlap(s) ($before → $after lines) — gv_tcp profile gets these via YT_GV/List.txt"
+        log "YT: applied, removed $removed googlevideo overlap(s) ($before → $after lines) — gv_tcp profile gets these via YT_GV/List.txt"
     else
         rm -f "$filtered"
-        log "YT: no googlevideo/c.youtube.com overlaps in upstream youtube.txt"
+        log "YT: no googlevideo overlaps in upstream youtube.txt"
     fi
     return 0
 }

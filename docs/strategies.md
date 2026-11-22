@@ -20,7 +20,7 @@
 - Три TCP autocircular профиля с разными стратегиями:
   - **RKN** — список ресурсов (TCP/TLS + HTTP) — 57 стратегий
   - **YouTube TCP** — youtube.com и связанные домены — 41 стратегия
-  - **YouTube GV** — видеосерверы googlevideo.com, видеокэши c.youtube.com и загрузки Google Play (gvt1.com) — 39 стратегий
+  - **YouTube GV** — видеосерверы googlevideo.com и загрузки Google Play (gvt1.com) — 39 стратегий
 - QUIC autocircular профили: YouTube QUIC (UDP/443) и Discord voice — с z2k morph-стратегиями (QUIC morph / timing morph)
 - Discord профили:
   - TCP: hostlist Discord включён в RKN-профиль, включая порты медиасерверов 2053, 2083, 2087, 2096 и 8443

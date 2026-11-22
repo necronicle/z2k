@@ -58,6 +58,12 @@ func (s *Service) init() {
 		s.Now = time.Now
 	}
 }
+// The c.youtube.com cache uses yt_tcp. A shared IP may still qualify through
+// an independent googlevideo.com answer, so keep already published addresses.
+func youtubeCacheName(name string) bool {
+	return strings.HasSuffix(strings.TrimSuffix(strings.ToLower(name), "."), ".c.youtube.com")
+}
+
 func (s *Service) OnDNS(name string, addrs []netip.Addr) <-chan struct{} {
 	done := make(chan struct{})
 	if !IsTarget(name) || s.whitelisted(name) {
@@ -78,10 +84,10 @@ func (s *Service) OnDNS(name string, addrs []netip.Addr) <-chan struct{} {
 		if !a.IsValid() || !a.IsGlobalUnicast() {
 			continue
 		}
-		if !providerCache(name, a) {
-			s.published[a] = struct{}{}
-		} else {
+		if providerCache(name, a) {
 			delete(s.published, a)
+		} else if !youtubeCacheName(name) {
+			s.published[a] = struct{}{}
 		}
 		e := s.known[a]
 		if e == nil {
@@ -245,7 +251,7 @@ func (s *Service) Restore() int {
 		}
 		if s.known[a] == nil {
 			s.known[a] = &entry{seen: k.Seen, name: k.Name}
-			if !providerCache(k.Name, a) {
+			if !youtubeCacheName(k.Name) && !providerCache(k.Name, a) {
 				s.published[a] = struct{}{}
 			}
 			n++
