@@ -300,7 +300,7 @@ menu_instagram_dns() {
     #   ip host <domain> <ipv4>
     local ig_entries
     ig_entries=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
-        | awk '/^ip host/ && ($3 ~ /(^|\.)instagram\.com$/ || $3 ~ /(^|\.)cdninstagram\.com$/) {print}')
+        | awk '/^ip host/ && ($3 ~ /(^|\.)instagram\.com$/ || $3 ~ /(^|\.)cdninstagram\.com$/ || $3 == "static.xx.fbcdn.net" || $3 == "scontent.xx.fbcdn.net") {print}')
 
     if [ -n "$ig_entries" ]; then
         # ---------- Записи ЕСТЬ → УБРАТЬ ----------
@@ -394,7 +394,7 @@ menu_instagram_dns() {
         # Перечитать и показать итог.
         local now_entries now_count
         now_entries=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
-            | awk '/^ip host/ && ($3 ~ /(^|\.)instagram\.com$/ || $3 ~ /(^|\.)cdninstagram\.com$/) {print}')
+            | awk '/^ip host/ && ($3 ~ /(^|\.)instagram\.com$/ || $3 ~ /(^|\.)cdninstagram\.com$/ || $3 == "static.xx.fbcdn.net" || $3 == "scontent.xx.fbcdn.net") {print}')
         if [ -n "$now_entries" ]; then
             now_count=$(printf '%s\n' "$now_entries" | wc -l | tr -d ' ')
             print_separator

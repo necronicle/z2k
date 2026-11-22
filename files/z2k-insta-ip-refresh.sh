@@ -11,7 +11,7 @@
 # bypassing DPI" and rotates a perfectly working strategy needlessly.
 #
 # This script: hits the VPS /resolve endpoint (HMAC-authenticated),
-# rewrites `ip host` entries for the 12 hostnames in HOSTS (7 Instagram +
+# rewrites `ip host` entries for the 14 hostnames in HOSTS (7 Instagram + 2 Facebook CDN +
 # 5 WhatsApp, добавлены 2026-08-05), flushes stale
 # conntrack so apps reconnect through new IPs.
 #
@@ -41,7 +41,9 @@ fi
 mkdir -p /tmp/z2k-log 2>/dev/null && chown root /tmp/z2k-log 2>/dev/null
 chmod 700 /tmp/z2k-log 2>/dev/null
 CONFIG="${CONFIG_FILE:-/opt/zapret2/config}"
+probe_dir=
 agh_sync_on_exit() {
+    [ -z "$probe_dir" ] || rm -rf "$probe_dir"
     _agh_dir="${ZAPRET2_DIR:-$(dirname "$CONFIG")}"
     if [ -r "$_agh_dir/z2k-agh-sync.sh" ]; then
         ZAPRET2_DIR="$_agh_dir" sh "$_agh_dir/z2k-agh-sync.sh" sync || \
@@ -113,7 +115,7 @@ SECRET=$(awk -F= '/^Z2K_RESOLVE_SECRET=/ {gsub(/[" ]/,"",$2); print $2; exit}' "
 # зарубежном резолве ради временного блока незачем, а прошитые адреса
 # Cloudflare ротирует, и через недели они стали бы мёртвыми.
 # Снятие уже прошитых записей — миграция в lib/install.sh.
-HOSTS="instagram.com www.instagram.com graph.instagram.com api.instagram.com instagram.c10r.instagram.com static.cdninstagram.com scontent.cdninstagram.com web.whatsapp.com www.whatsapp.com scontent.whatsapp.net graph.whatsapp.com v.whatsapp.com"
+HOSTS="instagram.com www.instagram.com graph.instagram.com api.instagram.com instagram.c10r.instagram.com static.cdninstagram.com scontent.cdninstagram.com static.xx.fbcdn.net scontent.xx.fbcdn.net web.whatsapp.com www.whatsapp.com scontent.whatsapp.net graph.whatsapp.com v.whatsapp.com"
 
 log() {
     printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >>"$LOG"
@@ -177,7 +179,7 @@ fi
 # VPS. Instagram не открывался, а вернуть адреса могла только ручная затравка.
 # Теперь пропавшие записи прописываются заново при первом удачном обращении.
 existing=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
-    | awk '/^ip host/ && ($3 ~ /(^|\.)instagram\.com$/ || $3 ~ /(^|\.)cdninstagram\.com$/ || $3 ~ /(^|\.)whatsapp\.(com|net)$/) {print}')
+    | awk '/^ip host/ && ($3 ~ /(^|\.)instagram\.com$/ || $3 ~ /(^|\.)cdninstagram\.com$/ || $3 == "static.xx.fbcdn.net" || $3 == "scontent.xx.fbcdn.net" || $3 ~ /(^|\.)whatsapp\.(com|net)$/) {print}')
 if [ -z "$existing" ]; then
     log "записей ip host для управляемых доменов нет — пропишу заново, если VPS ответит"
 else
@@ -284,7 +286,7 @@ filter_by_ranges() {
             }
             close(rf)
         }
-        {
+        NF == 2 {
             v = ip2n($2); ok = 0
             for (i = 1; i <= n; i++) {
                 d = 2 ^ (32 - len[i])
@@ -315,8 +317,8 @@ done
 filtered=$(printf '%s\n' "$filtered" | grep -c . >/dev/null 2>&1 && printf '%s\n' "$filtered" | grep . || true)
 
 if [ "$checked" = 1 ]; then
-    rejected=$(printf '%s\n' "$parsed" | grep -c . 2>/dev/null || echo 0)
-    kept=$(printf '%s\n' "$filtered" | grep -c . 2>/dev/null || echo 0)
+    rejected=$(printf '%s\n' "$parsed" | awk 'NF {n++} END {print n+0}')
+    kept=$(printf '%s\n' "$filtered" | awk 'NF {n++} END {print n+0}')
     if [ "$kept" = 0 ]; then
         log "FAIL: ни один адрес не попал в разрешённые диапазоны — ответ подозрительный, записи не трогаем"
         exit 1
@@ -348,86 +350,136 @@ fi
 # Если адрес всё же не успел — не страшно: он просто не попадёт в пин, а
 # прежние записи останутся нетронутыми (см. filter_alive ниже).
 PROBE_TIMEOUT="${Z2K_IP_PROBE_TIMEOUT:-3}"
-PROBE_MAX_TRY="${Z2K_IP_PROBE_MAX_TRY:-4}"
+PROBE_MAX_TRY="${Z2K_IP_PROBE_MAX_TRY:-0}"
 PROBE_KEEP="${Z2K_IP_PROBE_KEEP:-2}"
 
 # У c10r сертификат *.instagram.com не покрывает две метки перед доменом.
 # Только для этого имени проверяем доступность без проверки сертификата,
 # и только при наличии списка Meta, через который адреса уже отфильтрованы.
 # Для остальных имён и загрузки ответа резолвера проверка TLS остаётся строгой.
-probe_ip_alive() {   # host ip -> 0 если реально ответил
-    [ "${Z2K_IP_PROBE:-1}" = "1" ] || return 0
-    local host="$1" ip="$2"
-    shift 2
-    if [ "$host" = "instagram.c10r.instagram.com" ] && [ -s "$META_RANGES" ]; then
-        set -- -k
+probe_ip_alive() {   # host ip
+    [ "${Z2K_IP_PROBE:-1}" = 1 ] || return 0
+    local host="$1" ip="$2" path=/ expected='' marker='' digest='' result
+    set --
+    case "$host" in
+        static.xx.fbcdn.net)
+            path=/rsrc.php/y1/r/ay1hV6OlegS.ico
+            digest=8924f44d76426a340b105cbdc5b93678c6b772e847b393f2568d94847c0d8d80 ;;
+        static.cdninstagram.com)
+            path=/rsrc.php/yr/r/rzWiSjZRxk5.webp
+            digest=5ea73220ab5bda046e21d3f0cba26eafadeb3cc2bbd07a91978774048c84b6ee ;;
+        scontent.*)
+            # The media handler recognises an unsigned object request.
+            path=/z2k-media-probe; expected=403; marker='Unsigned URL' ;;
+        graph.instagram.com) expected=400; marker='"IGApiException"' ;;
+        graph.whatsapp.com) expected=500; marker='"WAApiException"' ;;
+        instagram.com) expected='301 https://www.instagram.com/' ;;
+        api.instagram.com) path=/robots.txt; expected='301 https://api.instagram.com/robots.txt/' ;;
+        www.instagram.com) path=/robots.txt; expected=200; marker='data on Instagram' ;;
+        web.whatsapp.com) path=/robots.txt; expected=200; marker='Allow: /accept' ;;
+        www.whatsapp.com|v.whatsapp.com) expected=200; marker="https://$host" ;;
+        instagram.c10r.instagram.com)
+            [ ! -s "$META_RANGES" ] || set -- -k
+            expected=404; marker='<title>4xx Client Error</title>' ;;
+        *) return 1 ;;
+    esac
+    result=$(curl -s --noproxy '*' "$@" -m "$PROBE_TIMEOUT" --max-filesize 4194304 \
+        --resolve "$host:443:$ip" -o "$probe_dir/body" -w '%{http_code} %{redirect_url}' \
+        "https://$host$path") || {
+        case "$?" in 7|28|35|52|55|56) return 2 ;; *) return 1 ;; esac
+    }
+    result=${result% }
+    if [ -n "$digest" ]; then
+        [ "$result" = 200 ] && [ "$(sha256sum "$probe_dir/body" | cut -d' ' -f1)" = "$digest" ]
+    else
+        [ "$result" = "$expected" ] && { [ -z "$marker" ] || grep -Fq "$marker" "$probe_dir/body"; }
     fi
-    code=$(curl -s "$@" -o /dev/null -w '%{http_code}' -m "$PROBE_TIMEOUT" \
-           --resolve "$host:443:$ip" "https://$host/" 2>/dev/null)
-    [ -n "$code" ] && [ "$code" != "000" ]
 }
 
-# Оставляет только те адреса, что ответили. Пусто на выходе — значит НЕ трогаем
-# то, что уже прописано: лучше прежний пин, чем заведомо мёртвый.
-filter_alive() {     # host, адреса на stdin
-    _h="$1"; _kept=0; _tried=0
-    while read -r _ip; do
-        [ -n "$_ip" ] || continue
-        [ "$_tried" -ge "$PROBE_MAX_TRY" ] && break
-        _tried=$((_tried + 1))
-        if probe_ip_alive "$_h" "$_ip"; then
-            printf '%s\n' "$_ip"
-            _kept=$((_kept + 1))
-            [ "$_kept" -ge "$PROBE_KEEP" ] && break
+probe_dir=$(mktemp -d) || exit 1
+: > "$probe_dir/working"
+: > "$probe_dir/tried"
+# First collect directly verified pairs for every name, including later donors.
+filter_alive() {
+    local host="$1" ip verdict
+    while read -r ip; do
+        if probe_ip_alive "$host" "$ip"; then
+            printf '%s %s\n' "$host" "$ip" >> "$probe_dir/working"
         else
-            log "  проба не прошла: $_h $_ip"
+            verdict=$?
+            log "проба не прошла: $host $ip"
+            # A transport failure says nothing about which service the IP hosts.
+            # Retry it in pass two if another host independently confirms the IP.
+            [ "$verdict" != 2 ] || continue
         fi
+        printf '%s %s\n' "$host" "$ip" >> "$probe_dir/tried"
     done
 }
+for h in $HOSTS; do
+    printf '%s\n' "$parsed" | awk -v h="$h" -v limit="$PROBE_MAX_TRY" \
+        '$1==h && !seen[$2]++ && (!limit || n++ < limit) {print $2}' | filter_alive "$h"
+done
 
-# 8. Diff & apply per host.
+# Only verified, range-checked donors may fill vacant slots.
 changes=0
 touched_ips=""
 for h in $HOSTS; do
-    cand_ips=$(printf '%s\n' "$parsed" | awk -v host="$h" '$1==host {print $2}' | head -8)
-    if [ -z "$cand_ips" ]; then
-        log "skip $h (VPS returned no IPs)"
-        continue
+    new_ips=$(awk -v h="$h" -v limit="$PROBE_KEEP" '$1==h && n++ < limit {print $2}' "$probe_dir/working")
+    set -- $new_ips
+    count=$#
+    if [ "$count" -lt "$PROBE_KEEP" ] && [ "${Z2K_IP_PROBE:-1}" = 1 ] && [ -s "$(ranges_for_host "$h")" ]; then
+        candidates=$(awk -v h="$h" 'FILENAME==ARGV[1] {if ($1==h) seen[$2]=1; next}
+            !seen[$2]++ {print h, $2}' "$probe_dir/tried" "$probe_dir/working")
+        for ip in $(filter_by_ranges "$candidates" "$(ranges_for_host "$h")" | awk '{print $2}'); do
+            probe_ip_alive "$h" "$ip" || continue
+            # The c10r alias has a mismatched certificate and a generic 404.
+            # Also require a strictly verified Instagram service on a borrowed IP.
+            if [ "$h" = instagram.c10r.instagram.com ]; then
+                probe_ip_alive www.instagram.com "$ip" || continue
+            fi
+            new_ips="${new_ips:+$new_ips }$ip"
+            log "резерв: $h $ip"
+            count=$((count + 1))
+            [ "$count" -lt "$PROBE_KEEP" ] || break
+        done
     fi
-    new_ips=$(printf '%s\n' "$cand_ips" | filter_alive "$h")
     if [ -z "$new_ips" ]; then
-        log "skip $h: ни один из адресов не ответил — прежние записи оставлены"
+        log "skip $h: нет проверенной замены — прежние записи оставлены"
         continue
     fi
     old_ips=$(LD_LIBRARY_PATH= ndmc -c "show running-config" 2>/dev/null \
         | awk -v host="$h" '/^ip host/ && $3==host {print $4}')
 
-    # Set equality?  Sort both and compare.
-    new_sorted=$(printf '%s\n' "$new_ips" | sort -u)
-    old_sorted=$(printf '%s\n' "$old_ips" | sort -u)
-    if [ -n "$old_ips" ] && [ "$new_sorted" = "$old_sorted" ]; then
-        log "unchanged $h: $(echo $new_ips | tr '\n' ' ')"
+    if [ "$(printf '%s\n' $new_ips | sort -u)" = "$(printf '%s\n' "$old_ips" | sort -u)" ]; then
+        log "unchanged $h"
         continue
     fi
-
-    # Remove ALL old entries for this host.
+    old_list=$(printf '%s\n' "$old_ips" | tr '\n' ' ')
+    new_list=$(printf '%s ' $new_ips)
+    # Install missing replacements first. At the Keenetic record limit an add
+    # can fail; keep the previous entries and retry on the next refresh.
+    added_ok=1
+    for ip in $new_ips; do
+        case " $old_list" in *" $ip "*) continue ;; esac
+        if LD_LIBRARY_PATH= ndmc -c "ip host $h $ip" >/dev/null 2>&1; then
+            log "  + $h $ip"
+            changes=$((changes + 1))
+        else
+            log "  FAIL add $h $ip"
+            added_ok=0
+        fi
+    done
+    [ "$added_ok" = 1 ] || continue
     for ip in $old_ips; do
+        case " $new_list" in *" $ip "*) continue ;; esac
         if LD_LIBRARY_PATH= ndmc -c "no ip host $h $ip" >/dev/null 2>&1; then
             log "  - $h $ip"
+            changes=$((changes + 1))
             touched_ips="$touched_ips $ip"
         else
             log "  FAIL remove $h $ip"
         fi
     done
-    # Add fresh entries.
-    for ip in $new_ips; do
-        if LD_LIBRARY_PATH= ndmc -c "ip host $h $ip" >/dev/null 2>&1; then
-            log "  + $h $ip"
-        else
-            log "  FAIL add $h $ip"
-        fi
-    done
-    changes=$((changes + 1))
 done
 
 # 9. Persist & flush conntrack on dropped IPs so apps don't ride dead paths.
@@ -437,11 +489,15 @@ if [ "$changes" -gt 0 ]; then
     else
         log "WARN: ndmc config save failed"
     fi
-    for ip in $touched_ips; do
-        conntrack -D -d "$ip" >/dev/null 2>&1 || true
-    done
-    log "conntrack flushed for old IPs"
+    # A removed IP can still serve another name after cross-host selection.
+    if [ -n "$touched_ips" ] && LD_LIBRARY_PATH='' ndmc -c "show running-config" > "$probe_dir/current"; then
+        for ip in $(printf '%s\n' $touched_ips | sort -u); do
+            if ! awk -v ip="$ip" '$1=="ip" && $2=="host" && $4==ip {used=1} END {exit !used}' "$probe_dir/current"; then
+                conntrack -D -d "$ip" >/dev/null 2>&1 || true
+            fi
+        done
+    fi
 fi
 
-log "=== refresh done: $changes host(s) updated ==="
+log "=== refresh done: $changes record change(s) ==="
 exit 0

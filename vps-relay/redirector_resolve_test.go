@@ -16,6 +16,17 @@ func TestRedirectorExactAllowlist(t *testing.T) {
 	}
 }
 
+func TestFbcdnExactAllowlist(t *testing.T) {
+	for host, want := range map[string]bool{
+		"static.xx.fbcdn.net": true, "scontent.xx.fbcdn.net": true,
+		"xx.fbcdn.net": false, "other.xx.fbcdn.net": false, "static.xx.fbcdn.net.example.org": false,
+	} {
+		if isInstaHost(host) != want {
+			t.Errorf("isInstaHost(%q), want %v", host, want)
+		}
+	}
+}
+
 func TestRedirectorCollectsAllResolvers(t *testing.T) {
 	var calls atomic.Int32
 	lookup := func(_ context.Context, _ string, resolver string) ([]string, error) {

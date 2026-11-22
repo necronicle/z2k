@@ -320,7 +320,8 @@ sed '/^ip host crashlogs.whatsapp.net /d' "$SB/pins" > "$SB/tmp"
 mv "$SB/tmp" "$SB/pins"
 touch "$SB/match"
 run
-grep -q '^match=20/20$' "$SB/state/last-result"
+active=$(awk '!seen[$3]++ {n++} END {print n+0}' "$SB/pins")
+grep -Fxq "match=$active/$active" "$SB/state/last-result"
 grep -q '^schema=AGH-before-dns-proxy$' "$SB/state/last-result"
 assert_same "$SB/original" "$SB/agh.yaml" 'unpinned name caused writes'
 [ ! -e "$SB/service.log" ]

@@ -74,10 +74,11 @@ case "\$*" in
         printf '%s' '{"results":{"instagram.c10r.instagram.com":["$LIVE1","$LIVE2"]}}'
         exit 0 ;;
 esac
-_k=0; _res=""; _prev=""
+_k=0; _res=""; _prev=""; _out=""
 for _a in "\$@"; do
     [ "\$_a" = "-k" ] && _k=1
     [ "\$_prev" = "--resolve" ] && _res="\$_a"
+    [ "\$_prev" = "-o" ] && _out="\$_a"
     _prev="\$_a"
 done
 echo "\$_res k=\$_k" >> "$SB/probe.log"
@@ -88,6 +89,7 @@ esac
 case "\$_host" in
     instagram.c10r.instagram.com)
         # сертификат *.instagram.com не покрывает две метки перед apex
+        echo '<title>4xx Client Error</title>' > "\$_out"
         [ "\$_k" = 1 ] && printf '404' || printf '000' ;;
     *) printf '200' ;;
 esac
@@ -114,7 +116,7 @@ eq "в журнале нет отказа «ни один не ответил»"
     "$(grep -c 'ни один из адресов не ответил' "$SB/refresh.log")"
 
 # Проба обязана ходить БЕЗ проверки сертификата — иначе это имя снова замрёт.
-eq "проба идёт с -k" "0" "$(grep -c 'k=0' "$SB/probe.log")"
+eq "проба идёт с -k" "0" "$(grep -c '^instagram.c10r.instagram.com:.*k=0' "$SB/probe.log")"
 
 # --- Различающая сила не потеряна -------------------------------------------
 # -k снимает проверку доверия, но не проверку достижимости: адрес, на котором
@@ -153,6 +155,8 @@ eq "затравка c10r на месте" "1" \
 eval "$(sed -n '/^probe_ip_alive()/,/^}/p' "$R")"
 META_RANGES="$SB/z2k/lists/meta-ranges.txt"
 PROBE_TIMEOUT=1
+probe_dir="$SB"
+: > "$probe_dir/body"
 curl() { printf '%s\n' "$*" > "$SB/probe-args"; printf '200'; }
 probe_ip_alive www.instagram.com "$LIVE1"
 case "$(cat "$SB/probe-args")" in *' -k '*) no "обычные имена проверяют сертификат" strict insecure ;; *) ok "обычные имена проверяют сертификат" ;; esac

@@ -572,10 +572,12 @@ func makeSessionID() string {
 // Держать домен в аллоулисте ради временного блока смысла нет: пины пришлось
 // бы обновлять ежедневно, а без них сайт открывается сам.
 var instaApex = map[string]bool{
-	"instagram.com":    true,
-	"cdninstagram.com": true,
-	"whatsapp.com":     true,
-	"whatsapp.net":     true,
+	"static.xx.fbcdn.net":   true,
+	"scontent.xx.fbcdn.net": true,
+	"instagram.com":         true,
+	"cdninstagram.com":      true,
+	"whatsapp.com":          true,
+	"whatsapp.net":          true,
 }
 var instaSuffixes = []string{".instagram.com", ".cdninstagram.com", ".whatsapp.com", ".whatsapp.net"}
 

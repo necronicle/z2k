@@ -755,7 +755,7 @@ if command -v ndmc >/dev/null 2>&1; then
     fi
     # Запасной список — на случай, когда скрипта уже нет (частичная установка,
     # ручное удаление файлов). Лучше снять по памяти, чем не снять вовсе.
-    [ -n "$_pin_hosts" ] || _pin_hosts="instagram.com www.instagram.com graph.instagram.com api.instagram.com instagram.c10r.instagram.com static.cdninstagram.com scontent.cdninstagram.com web.whatsapp.com www.whatsapp.com scontent.whatsapp.net graph.whatsapp.com v.whatsapp.com"
+    [ -n "$_pin_hosts" ] || _pin_hosts="instagram.com www.instagram.com graph.instagram.com api.instagram.com instagram.c10r.instagram.com static.cdninstagram.com scontent.cdninstagram.com static.xx.fbcdn.net scontent.xx.fbcdn.net web.whatsapp.com www.whatsapp.com scontent.whatsapp.net graph.whatsapp.com v.whatsapp.com"
     # Функция выключена: мы эти имена не ведём, запись поставил человек.
     [ "$(_z2k_cfg_flag Z2K_INSTA_DNS)" = "0" ] && _pin_hosts=""
     [ "$(_z2k_cfg_flag Z2K_REDIRECTOR_DNS)" = "0" ] || _pin_hosts="$_pin_hosts redirector.googlevideo.com"

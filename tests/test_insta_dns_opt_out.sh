@@ -73,7 +73,7 @@ cat > "$SB5/bin/curl" <<'EOF5'
 #!/bin/sh
 case "$*" in
     *"/resolve"*) printf '%s' '{"results":{"instagram.com":["157.240.9.174"]}}' ;;
-    *) printf '200' ;;
+    *) printf '301 https://www.instagram.com/' ;;
 esac
 exit 0
 EOF5
