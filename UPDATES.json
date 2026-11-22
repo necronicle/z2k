@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 190,
-  "current": "p-88.10",
+  "seq": 191,
+  "current": "p-88.11",
   "install_map": {
   "common/ipt.sh": ["/opt/zapret2/common/ipt.sh"],
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
@@ -181,7 +181,7 @@
   "files/init.d/S98tg-tunnel": "8355ef7cc5e75bb98c1727ea3266144d7c9800432d877cc224ae2adf82b76b1d",
   "files/init.d/S99z2k-scheduler": "831e45480c3deee69fd2e8819213d333a0f92878990116737307f3eca5f3f37d",
   "files/lists/cf_extra_check_ips.txt": "79ffc4803151f5ded1de96d7dc1ecaba37ec2e4b2bb7985cecf8c7ff8da68975",
-  "files/lists/extra-domains.txt": "a99fe8b35fe3b5c68cb4a1965fbaec61019144629f01a66420e1146ae65c5673",
+  "files/lists/extra-domains.txt": "413a57fd2ee91102a599d71e6c01cb05bb1832c21dfe6f6e560fb523467f78d9",
   "files/lists/extra_strats/TCP/RKN/Discord.txt": "8985a2aa3b4e188478a101d732fbd9ab48a2322d0fa06bb46dcdf6473abe4f26",
   "files/lists/extra_strats/TCP/RKN/List.txt": "666b1c4daf031a1166174c84d804100f3b7ec96466ec7cb1337c0d45923f49b4",
   "files/lists/extra_strats/TCP/YT/List.txt": "0c11a111406a57de2002c9cb6079d70f038a7a51bb57de7cb85237638a055c62",
@@ -225,7 +225,7 @@
   "files/z2k-dns-check.sh": "ab69177fe56a37ed0d91bdc95af3363a683d57f0cd93b964a4cf1fa574c1b0f7",
   "files/z2k-fix-tg-watchdog.sh": "95a063051c86b11fe96aa5b39349306500a54b1b25601b38184046cfedcd161e",
   "files/z2k-geosite.sh": "776361a9683c03a202d3b6c3eb52ec84e1b59ef52f1c6da1d86d0845e89e283c",
-  "files/z2k-insta-ip-refresh.sh": "a39615ddc4a6422ebda2114eefaa554454358c237a3d324ad6f4961f78e75bcf",
+  "files/z2k-insta-ip-refresh.sh": "c298ec992c3e237e5686be68978312beab3f8d08aa9ab3cc178eab623e9fb679",
   "files/z2k-nfqueue-selfheal.sh": "280f0811daf5d83d2f214dd34234e435c8c639f6ef8544154a481448be1f24b3",
   "files/z2k-ppe-deoffload.sh": "7d14e9e43718bcf2521d86d9634c68e09de79acb33be782ea1e18eef3a11f8b7",
   "files/z2k-redirector-ip-refresh.sh": "5f6f0d8d9c0005c2d71d8c922478e82678a57086d0c01b9cebcf52963f4ea251",
@@ -239,8 +239,8 @@
   "lib/auto_update.sh": "6f6aa297c9c660b2d0e3f73230f40e27b4b7df7b7346a68d6e1c9c8c6906bf4c",
   "lib/config.sh": "48ce8a12848dc893ff8b102dc607f9079369b17132a440971dd29870ae852614",
   "lib/config_official.sh": "d82339df81f1e37098639ef9c04e4c776e80896f383228ff7c2a3c832664fbb9",
-  "lib/install.sh": "5288d8bb483e97fafac97d3a43e261bc701140b00ecbfe6bd37d3184fc076f9e",
-  "lib/menu.sh": "686a9139cc464c3867984d2012de22a0617a3f24944473903c9a5e5829e9df9b",
+  "lib/install.sh": "a40948a691304c5a6cd641faaba29a77d0cfcecef10e4674345ffea8a0c88ee3",
+  "lib/menu.sh": "27d3ed9ba38d7d984155b70696755646e2140e51762498fc63d89b79e5eb6432",
   "lib/strategies.sh": "87f1ced9815120a019ef1f7f9256e212ca8e32374ea213fd1fc839e3e51fa705",
   "lib/utils.sh": "a7fbfcfb5935f3571b1849e7a60c2dc5f65479fdc65e8208e98d18c6d6a8aff4",
   "lib/wan.sh": "7f66e83516031bf66ea5f185804e0c90442507d7a75c95a7bc27f6b86d639129",
@@ -284,7 +284,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "0dad21c0bfdd2647156dc130f44ac3cb30e33d1c0bf1ca528b43f9b541fc2c3a",
+  "webpanel/www/index.html": "2dfce84993baeb00f251e220fff329b4e108ffea9a47f2af15207b5787469244",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -671,6 +671,7 @@
 {"v": "p-88.6", "type": "patch", "ts": "2026-11-16T16:42:08Z", "ref": "p-88.6", "desc": "Улучшена диагностика: отчёт включает дополнительные ошибки и точнее показывает настройки. Исправлена очистка после удаления, обновлена инструкция по установке и работе с веб-панелью.", "changed_files": ["webpanel/www/index.html", "files/z2k-diag.sh", "lib/install.sh", "webpanel/cgi/actions.sh", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-88.7", "type": "patch", "ts": "2026-11-17T21:15:20Z", "ref": "p-88.7", "desc": "Удалена статическая подмена DNS для redirector.googlevideo.com. Обновление автоматически очищает старые записи этого имени в Keenetic; остальные настройки DNS сохраняются.", "changed_files": ["webpanel/www/index.html", "files/z2k-redirector-ip-refresh.sh", "files/z2k-update-lists.sh", "lib/auto_update.sh", "lib/install.sh", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-88.8", "type": "patch", "ts": "2026-11-20T09:14:30Z", "ref": "p-88.8", "desc": "Добавлена благодарность WanTBeeR за оплату токенов ИИ для разработки z2k.", "changed_files": ["webpanel/www/index.html", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "UPDATES.json"], "steps": [], "full_install": false},
-{"v": "p-88.10", "type": "patch", "ts": "2026-11-22T12:16:25Z", "ref": "p-88.10", "desc": "Видеокэши c.youtube.com снова используют обычные TCP-стратегии YouTube. В веб-панель добавлена благодарность Kurdt_Kobain за поддержку проекта, а в README возвращена команда полной зачистки zapret и zapret2.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lists/extra_strats/TCP/YT_GV/List.txt", "files/z2k-geosite.sh", "lib/config_official.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "z2k-detect/builds/z2k-detect-linux-386", "z2k-detect/builds/z2k-detect-linux-amd64", "z2k-detect/builds/z2k-detect-linux-arm", "z2k-detect/builds/z2k-detect-linux-arm64", "z2k-detect/builds/z2k-detect-linux-mips", "z2k-detect/builds/z2k-detect-linux-mips64le", "z2k-detect/builds/z2k-detect-linux-mipsle", "z2k-detect/builds/z2k-detect-linux-ppc64", "z2k-detect/builds/z2k-detect-linux-riscv64", "UPDATES.json"], "steps": ["regen-config", "validate-config", "refresh-binaries", "restart-service"], "full_install": false}
+{"v": "p-88.10", "type": "patch", "ts": "2026-11-22T12:16:25Z", "ref": "p-88.10", "desc": "Видеокэши c.youtube.com снова используют обычные TCP-стратегии YouTube. В веб-панель добавлена благодарность Kurdt_Kobain за поддержку проекта, а в README возвращена команда полной зачистки zapret и zapret2.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lists/extra_strats/TCP/YT_GV/List.txt", "files/z2k-geosite.sh", "lib/config_official.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "z2k-detect/builds/z2k-detect-linux-386", "z2k-detect/builds/z2k-detect-linux-amd64", "z2k-detect/builds/z2k-detect-linux-arm", "z2k-detect/builds/z2k-detect-linux-arm64", "z2k-detect/builds/z2k-detect-linux-mips", "z2k-detect/builds/z2k-detect-linux-mips64le", "z2k-detect/builds/z2k-detect-linux-mipsle", "z2k-detect/builds/z2k-detect-linux-ppc64", "z2k-detect/builds/z2k-detect-linux-riscv64", "UPDATES.json"], "steps": ["regen-config", "validate-config", "refresh-binaries", "restart-service"], "full_install": false},
+{"v": "p-88.11", "type": "patch", "ts": "2026-11-22T14:20:57Z", "ref": "p-88.11", "desc": "Для Instagram, WhatsApp и Facebook CDN роутер сохраняет все проверенные адреса и ищет отдельную рабочую замену для каждого недоступного. В дополнительные домены добавлен blockme.site. Видеокэши c.youtube.com по-прежнему используют обычные стратегии YouTube.", "changed_files": ["webpanel/www/index.html", "files/lists/extra-domains.txt", "files/z2k-insta-ip-refresh.sh", "lib/install.sh", "lib/menu.sh", "UPDATES.json"], "steps": [], "full_install": false}
   ]
 }
