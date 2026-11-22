@@ -61,7 +61,7 @@ show_main_menu() {
 |  bootnet, ewgen911, cmfifty, Ret80,               |
 |  Шулепов Александр, Андрюшка, Marshmalick,        |
 |  Mustang, Роман Борисович, zelenewruan, Den       |
-|  WanTBeeR, Kurdt_Kobain                           |
+|  WanTBeeR, Kurdt_Kobain, Сергей                   |
 +===================================================+
 
 MENU

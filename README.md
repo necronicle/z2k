@@ -250,7 +250,7 @@ netsh interface tcp set global timestamps=disabled
 > **TheGreatYogo** · **logistik77** · **b11d11** · **BloodKnife39** · **SIGogelon** · **yozh**<br>
 > **Altaec** · **DIDIQ Rawa** · **GregMSK** · **Кожевников** · **bootnet** · **ewgen911**<br>
 > **cmfifty** · **Ret80** · **Шулепов Александр** · **Андрюшка** · **Marshmalick** · **Mustang**<br>
-> **Роман Борисович** · **zelenewruan** · **Den** · **WanTBeeR** · **Kurdt_Kobain**<br>
+> **Роман Борисович** · **zelenewruan** · **Den** · **WanTBeeR** · **Kurdt_Kobain** · **Сергей**<br>
 
 ## Лицензия
 
