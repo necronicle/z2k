@@ -15,6 +15,7 @@ STUB
 chmod +x "$SB/bin/ndmc"
 cp "$ROOT/files/z2k-insta-ip-refresh.sh" "$SB/"
 awk -F'"' '/^HOSTS=/ {n=split($2,h," ");for(i=1;i<=n;i++)print "ip host "h[i]" 1.2.3.4"}' "$SB/z2k-insta-ip-refresh.sh" > "$SB/pins"
+web_count=$(awk 'END {print NR}' "$SB/pins")
 for h in whatsapp.com whatsapp.net g.whatsapp.net static.whatsapp.net mmg.whatsapp.net pps.whatsapp.net dit.whatsapp.net v.whatsapp.net crashlogs.whatsapp.net; do
     echo "ip host $h 85.192.60.175" >> "$SB/pins"
 done
@@ -28,7 +29,7 @@ dns:
 YAML
 export Z2K_AGH_YAML="$SB/agh.yaml"
 out=$("${Z2K_TEST_SH:-sh}" "$SB/functions")
-printf '%s\n' "$out" | grep -q 'веб 12/12, мобильный WA 9/9'
+printf '%s\n' "$out" | grep -q "веб $web_count/$web_count, мобильный WA 9/9"
 printf '%s\n' "$out" | grep -q 'активная проверка ещё не выполнялась'
 case "$out" in *'и это норма'*|*'будет работать через раз'*|*'работать не будет'*) exit 1;; esac
 cat > "$SB/agh-sync/last-result" <<'STATE'
@@ -43,4 +44,4 @@ out=$("${Z2K_TEST_SH:-sh}" "$SB/functions")
 for value in AGH-before-dns-proxy 21/21 instagram.com '2026-11-11 12:00:00' 127.0.0.1:5300; do
     printf '%s\n' "$out" | grep -qF "$value"
 done
-echo 'PASS: active result, timestamp, conflict, endpoint and 12+9 counts; no upstream guesses'
+echo 'PASS: active result, timestamp, conflict, endpoint and managed host counts; no upstream guesses'
