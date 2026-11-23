@@ -499,7 +499,7 @@ done
 # ответов DNS снимает подметание ниже (в них есть Z2K и NFQUEUE).
 _gvsub_pid=$(cat /var/run/z2k-gvsub.pid 2>/dev/null)
 [ -n "$_gvsub_pid" ] && kill "$_gvsub_pid" 2>/dev/null && log_info "  Остановлена служба подмены адресов"
-rm -f /var/run/z2k-gvsub.pid /tmp/z2k-gvsub.json /tmp/z2k-gvsub.json.neutral /tmp/z2k-gv-ips.txt
+rm -f /var/run/z2k-gvsub.pid /tmp/z2k-gvsub.json /tmp/z2k-gvsub.json.neutral /tmp/z2k-gv-ips.txt /tmp/z2k-gv-policy.dat /tmp/z2k-gv-observed.tsv
 
 # Поиск и удаление любых оставшихся правил с упоминанием nfqws/zapret в базовых цепочках.
 # Через -S: так правило снимается целиком и не зависит от номеров строк.

@@ -58,10 +58,33 @@ local flows = z2k_pf_flows
 -- устраняет ожидание повтора от устройства. Бюджет общий для всей передачи.
 local RESYN_DELAY_MS = 60
 local RESYN_MAX_SENDS = 6
+local RESYN_MIN_MS = 60
+local RESYN_MAX_MS = 320
+local GIVEUP_MIN_MS = 1100
+local GIVEUP_MAX_MS = 3200
+local GIVEUP_DEFAULT_MS = 1500
+
+local function clamp_ms(v, lo, hi)
+	if v < lo then return lo end
+	if v > hi then return hi end
+	return v
+end
 
 local function cancel_syn_timer(st)
 	if st.timer and type(timer_del) == "function" then timer_del(st.timer) end
 	st.timer = nil
+end
+
+local function cancel_giveup_timer(st)
+	if st.giveup_timer and type(timer_del) == "function" then timer_del(st.giveup_timer) end
+	st.giveup_timer = nil
+end
+
+local function autopilot_policy(desync)
+	if desync and desync.arg and desync.arg.autopilot == "0" then return nil, nil end
+	local fn = rawget(_G, "z2k_autopilot_lookup_dis")
+	if type(fn) ~= "function" then return nil, nil end
+	return fn(desync.dis)
 end
 
 local function ip_text(raw)
@@ -86,6 +109,7 @@ local function sweep(now)
 	for k, st in pairs(flows) do
 		if now - st.t > 60 then
 			cancel_syn_timer(st)
+			cancel_giveup_timer(st)
 			flows[k] = nil
 		end
 	end
@@ -209,6 +233,7 @@ local function retry_probe(st, syn_ack)
 end
 
 local function schedule_syn(st)
+	cancel_giveup_timer(st)
 	cancel_syn_timer(st)
 	if type(timer_set) ~= "function" then
 		-- Совместимость со старым движком: прежняя немедленная передача.
@@ -218,7 +243,14 @@ local function schedule_syn(st)
 	if (st.syn_sends or 0) >= RESYN_MAX_SENDS then return end
 	st.timer = "z2k_pf_syn_"..st.key:gsub(".", function(b) return string.format("%02x", b:byte()) end)
 	-- Один периодический таймер: callback не пересоздаёт его во время срабатывания.
-	timer_set(st.timer, "z2k_preflight_syn_timer", RESYN_DELAY_MS, false, st)
+	timer_set(st.timer, "z2k_preflight_syn_timer", st.resyn_delay_ms or RESYN_DELAY_MS, false, st)
+end
+
+local function schedule_giveup(st)
+	cancel_giveup_timer(st)
+	if not st.giveup_ms or type(timer_set) ~= "function" then return end
+	st.giveup_timer = "z2k_pf_giveup_"..st.key:gsub(".", function(b) return string.format("%02x", b:byte()) end)
+	timer_set(st.giveup_timer, "z2k_preflight_giveup_timer", st.giveup_ms, true, st)
 end
 
 function z2k_preflight_syn_timer(name, st)
@@ -226,6 +258,22 @@ function z2k_preflight_syn_timer(name, st)
 	send(st, st.orig)
 	st.syn_sends = (st.syn_sends or 0) + 1
 	if st.syn_sends >= RESYN_MAX_SENDS then cancel_syn_timer(st) end
+end
+
+function z2k_preflight_giveup_timer(name, st)
+	if not st or st.giveup_timer ~= name or flows[st.key] ~= st then return end
+	st.giveup_timer = nil
+	if st.stage == "resyn" or st.stage == "done" then return end
+	cancel_syn_timer(st)
+	if st.cli_next then
+		send(st, make_packet(st, TH_RST, st.cli_next, 0))
+	end
+	st.stage = "done"
+	st.gave_up = true
+	if st.orig then
+		send(st, deepcopy(st.orig))
+	end
+	log(st, "active giveup timer, original SYN sent")
 end
 
 local function teardown(st)
@@ -251,28 +299,57 @@ local function step(ctx, desync)
 			-- соединение клиента. Не начинаем пробу и не применяем её timeout.
 			if st and st.stage == "done" and st.isn == tcp.th_seq then return VERDICT_PASS end
 			if not st or st.isn ~= tcp.th_seq then
-				if st then cancel_syn_timer(st) end
+				if st then
+					cancel_syn_timer(st)
+					cancel_giveup_timer(st)
+				end
 				sweep(now)
+				local ap_entry, ap_header = autopilot_policy(desync)
+				local sni = desync.arg.sni
+				if ap_header and ap_header.preflight_sni and ap_header.preflight_sni ~= ""
+					and (not sni or sni == "" or sni == "www.google.com") then
+					sni = ap_header.preflight_sni
+				end
 				local hello = blob(desync, desync.arg.blob or "fake_default_tls")
-				if desync.arg.sni then
-					hello = tls_mod(hello, "rnd,sni="..desync.arg.sni)
+				if sni and sni ~= "" then
+					hello = tls_mod(hello, "rnd,sni="..sni)
 				else
 					hello = tls_mod(hello, "rnd")
 				end
+				local raw_resyn = (ap_entry and ap_entry.resyn_delay_ms) or (ap_header and ap_header.resyn_delay_ms)
+				local resyn_ms = raw_resyn and clamp_ms(math.floor(raw_resyn), RESYN_MIN_MS, RESYN_MAX_MS) or RESYN_DELAY_MS
+				local timeout_s = tonumber(desync.arg.timeout) or 3
+				local giveup_ms = nil
+				if desync.arg.autopilot ~= "0" then
+					local raw_giveup = tonumber(desync.arg.giveup_ms)
+						or (ap_entry and ap_entry.giveup_ms)
+						or (ap_header and ap_header.preflight_giveup_ms)
+					if (not raw_giveup or raw_giveup <= 0) and (ap_header or ap_entry) then
+						raw_giveup = GIVEUP_DEFAULT_MS
+					end
+					if raw_giveup and raw_giveup > 0 then
+						local clamped = clamp_ms(math.floor(raw_giveup), GIVEUP_MIN_MS, GIVEUP_MAX_MS)
+						giveup_ms = math.min(clamped, math.max(10, math.floor(timeout_s * 1000)))
+					end
+				end
+				local ifout = (desync.ifout and desync.ifout ~= "") and desync.ifout or nil
 				st = {
 					key = key, stage = "probe_syn", t = now, isn = tcp.th_seq, orig = deepcopy(dis),
 					ip = ip_text(select(2, src_dst(dis))), port = tcp.th_sport,
-					ifout = desync.ifout, fwmark = desync.fwmark, hello = hello,
+					ifout = ifout, fwmark = desync.fwmark, hello = hello,
 					wsize = tonumber(desync.arg.wsize) or 1,
 					pieces_need = tonumber(desync.arg.pieces) or 1,
 					pos = desync.arg.pos or "1,midsld",
-					timeout = tonumber(desync.arg.timeout) or 3,
+					timeout = timeout_s,
+					resyn_delay_ms = resyn_ms,
+					giveup_ms = giveup_ms,
 					open = tonumber(desync.arg.open),
 					openwin = tonumber(desync.arg.openwin) or 65535,
 					pieces = 0, bytes = 0, ip_id = dis.ip and dis.ip.ip_id or 0, resets = 0,
 				}
 				flows[key] = st
 				remember_syn_ts(st, dis, desync.arg)
+				schedule_giveup(st)
 				make_probe_syn(dis, desync.arg)
 				log(st, "probe SYN")
 				return VERDICT_MODIFY
@@ -282,6 +359,7 @@ local function step(ctx, desync)
 				-- Сервер не должен держать пробное соединение с тем же портом.
 				if st.cli_next then send(st, make_packet(st, TH_RST, st.cli_next, 0)) end
 				cancel_syn_timer(st)
+				cancel_giveup_timer(st)
 				st.stage = "done"
 				st.gave_up = true
 				return VERDICT_PASS
@@ -437,9 +515,18 @@ function z2k_preflight(ctx, desync)
 	end
 	local st = flows[flow_key(dis, desync.outgoing)]
 	local syn_only = bitand(dis.tcp.th_flags, TH_SYN) ~= 0 and bitand(dis.tcp.th_flags, TH_ACK) == 0
-    if not st and syn_only and desync.outgoing and provider_destination(dis, desync.arg.provider_state) then
-        instance_cutoff_shim(ctx, desync)
-        return
+    if not st and syn_only and desync.outgoing then
+        if provider_destination(dis, desync.arg.provider_state) then
+            instance_cutoff_shim(ctx, desync)
+            return
+        end
+        local ap_entry = autopilot_policy(desync)
+        if ap_entry and (ap_entry.verdict == "good_direct" or ap_entry.verdict == "good_ggc"
+            or (ap_entry.kind == "isp" and ap_entry.verdict == "unknown")) then
+            DLOG("z2k_preflight: autopilot bypass ("..tostring(ap_entry.kind).."/"..tostring(ap_entry.verdict)..")")
+            instance_cutoff_shim(ctx, desync)
+            return
+        end
     end
 	-- Профиль получил управление не с начала: имя стало известно только сейчас,
 	-- SYN прошёл мимо нас, и начинать пробу посреди соединения нечем.

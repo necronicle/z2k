@@ -1327,6 +1327,13 @@ LUA_Z2K_QUIC_SILENCE="$ZAPRET_BASE/lua/z2k-quic-silence.lua"
 LUA_Z2K_TCP16="$ZAPRET_BASE/lua/z2k-tcp16.lua"
 [ -f "$LUA_Z2K_TCP16" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_TCP16"
 #
+# z2k-gv-autopilot.lua — рантайм автопилота YouTube / googlevideo / gvt1 (Guard 1/2/4 +
+# DoH/DoT-логгер + кэшированный O(1)-разбор /tmp/z2k-gv-policy.dat). Грузится ДО
+# z2k-preflight.lua и z2k-quic-reject.lua; z2k-preflight мягко обращается к нему при
+# наличии глобального lookup, а отказ QUIC делит общий конструктор из z2k-quic-reject.lua.
+LUA_Z2K_GV_AUTOPILOT="$ZAPRET_BASE/lua/z2k-gv-autopilot.lua"
+[ -f "$LUA_Z2K_GV_AUTOPILOT" ] && LUAOPT="$LUAOPT --lua-init=@$LUA_Z2K_GV_AUTOPILOT"
+#
 # z2k-preflight.lua — проверка DPI отдельным соединением в профиле googlevideo:
 # адреса, которые режутся по ОТВЕТУ сервера, плечами не лечатся вовсе. В ротации
 # не участвует. Грузится ПОСЛЕ zapret-lib.lua и zapret-antidpi.lua (нужны blob,
@@ -3074,7 +3081,7 @@ z2k_udp_masquerade_fix_start()
     # Условие — шаг в СОБРАННОМ конфиге, а не значение Z2K_GV_SERVER_REPLY2: флаг,
     # изменённый без пересборки, снял бы правило при живом шаге.
     case "$NFQWS2_OPT" in
-        *--lua-desync=z2k_preflight*)
+        *--lua-desync=z2k_preflight*|*--lua-desync=z2k_autopilot_stall_guard*)
             for iface in $wan; do
                 iptablesw -t nat -A "$Z2K_IPT_NAT_CHAIN" -o "$iface" -m mark --mark "$mark_processed" -p tcp --dport 443 -j MASQUERADE
             done
@@ -3147,7 +3154,7 @@ EOF_SENTINELS
 # (у старого z2k-detect её нет — тогда тихо ничего не делаем).
 z2k_gvsub_enabled()
 {
-    [ "${Z2K_GV_SERVER_REPLY2:-1}" = "1" ] || return 1
+    [ "${Z2K_GV_SERVER_REPLY2:-1}" = "1" ] || [ "${Z2K_YT_AUTOPILOT:-}" = "1" ] || return 1
     [ "$FWTYPE" = "iptables" ] || return 1
     [ -x "$Z2K_GVSUB_BIN" ] || return 1
     "$Z2K_GVSUB_BIN" 2>&1 | grep -q "gvsub" || return 1
@@ -3263,6 +3270,9 @@ z2k_gvsub_start()
     mkdir -p "${Z2K_GVSUB_LOG%/*}" 2>/dev/null
     # Журнал в /tmp (tmpfs): при старте обрезаем, чтобы не копился.
     : > "$Z2K_GVSUB_LOG" 2>/dev/null
+    # Если файл DoH/DoT-наблюдений уже создан (например тестом или от root),
+    # отдаём владельца nobody, чтобы nfqws2 продолжал дописывать туда строки.
+    [ -f /tmp/z2k-gv-observed.tsv ] && chown nobody /tmp/z2k-gv-observed.tsv 2>/dev/null || :
     local _no6=""
     [ "$DISABLE_IPV6" = "1" ] && _no6="-no-ipv6"
     # Каркас (цепочки, очередь DNS) служба держит и сама: хук NDM чинит правила
@@ -3290,6 +3300,9 @@ z2k_gvsub_stop()
     # выходит за ~1 с (таймаут чтения очереди).
     while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 5 ]; do sleep 1; i=$((i+1)); done
     kill -9 "$pid" 2>/dev/null
+    # Политику снимаем, чтобы остановленный gvsub не оставлял устаревших правил;
+    # основное состояние /tmp/z2k-gvsub.json сохраняется до перезагрузки.
+    rm -f /tmp/z2k-gv-policy.dat 2>/dev/null
     # Файл состояния не удаляем: из него служба при следующем запуске берёт
     # адреса, которые устройства держат в своём кэше DNS (10.11.2026).
     return 0

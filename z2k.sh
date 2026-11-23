@@ -1409,6 +1409,18 @@ download_init_script() {
         die "Ошибка загрузки files/lua/z2k-quic-reject.lua"
     fi
 
+    # z2k-gv-autopilot.lua — автопилот YouTube / googlevideo / gvt1 поверх
+    # политики /tmp/z2k-gv-policy.dat. Профили ссылаются на функции по имени
+    # (z2k_autopilot_quic, z2k_autopilot_tcp_fastfail, z2k_autopilot_stall_guard,
+    # z2k_autopilot_observe), поэтому файл обязателен на диске.
+    url="${GITHUB_RAW}/files/lua/z2k-gv-autopilot.lua"
+    output="${lua_dir}/z2k-gv-autopilot.lua"
+    if z2k_fetch "$url" "$output"; then
+        print_success "Загружено: files/lua/z2k-gv-autopilot.lua"
+    else
+        die "Ошибка загрузки files/lua/z2k-gv-autopilot.lua"
+    fi
+
     # z2k-alert.lua и z2k-quic-silence.lua — поправки к штатному детектору
     # неудач и детектор молчания QUIC. Профили ссылаются на функции по имени
     # (failure_detector=z2k_fail_tls_alert / z2k_fail_quic_silence), поэтому
