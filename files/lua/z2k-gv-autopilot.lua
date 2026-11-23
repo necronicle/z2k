@@ -564,7 +564,8 @@ local function observe_packet(desync)
     if not raw_dst then return end
 
     local pol = load_policy()
-    if pol and pol.ips[raw_dst] and pol.ips[raw_dst].verdict ~= "unknown" then
+    local existing = pol and pol.ips[raw_dst]
+    if existing and existing.verdict ~= "unknown" and existing.kind ~= "gfe" and existing.kind ~= "yt" then
         return
     end
 
@@ -862,7 +863,7 @@ function z2k_autopilot_stall_timer(name, st)
 end
 
 -- --lua-desync=z2k_autopilot_stall_guard — Guard 4: сторож зависания ISP GGC после ServerHello.
-function z2k_autopilot_stall_guard(_, desync)
+function z2k_autopilot_stall_guard(ctx, desync)
     local dis = desync and desync.dis
     if not (dis and dis.tcp and (dis.ip or dis.ip6)) then
         return
@@ -871,14 +872,45 @@ function z2k_autopilot_stall_guard(_, desync)
     observe_packet(desync)
 
     local crec = desync.track and desync.track.lua_state
-    if not crec or crec.z2k_sg_done then
+    if not crec then
+        return
+    end
+    if crec.z2k_sg_done then
+        if instance_cutoff_shim then
+            instance_cutoff_shim(ctx, desync)
+        elseif instance_cutoff then
+            instance_cutoff(ctx, desync)
+        end
         return
     end
 
     local st = crec.z2k_sg
+    local flags = dis and dis.tcp and dis.tcp.th_flags
+    if flags and band(flags, 0x05) ~= 0 then
+        if st then
+            cancel_stall_timer(st)
+            st.armed = false
+        end
+        crec.z2k_sg_done = true
+        if instance_cutoff_shim then
+            instance_cutoff_shim(ctx, desync)
+        elseif instance_cutoff then
+            instance_cutoff(ctx, desync)
+        end
+        return
+    end
     if not st then
         local entry = z2k_autopilot_lookup_dis(dis)
         if not entry or entry.kind ~= "isp" then
+            if entry and (entry.kind == "google" or entry.kind == "play")
+               and desync.l7payload == "tls_client_hello" then
+                crec.z2k_sg_done = true
+                if instance_cutoff_shim then
+                    instance_cutoff_shim(ctx, desync)
+                elseif instance_cutoff then
+                    instance_cutoff(ctx, desync)
+                end
+            end
             return
         end
         local is_v6 = dis.ip6 ~= nil
@@ -948,11 +980,52 @@ function z2k_autopilot_stall_guard(_, desync)
         return
     end
 
+    local sbuf = desync.reasm_data or (dis and dis.payload)
+    local sn = type(sbuf) == "string" and #sbuf or 0
+    local tls_kind = "other"
+    if sn >= 5 then
+        local b1, b2, b3 = sbuf:byte(1, 3)
+        if b1 and b1 >= 20 and b1 <= 23 and b2 == 3 and b3 <= 4 then
+            local pos = 1
+            local saw_ctl, saw_alert = false, false
+            while pos + 4 <= sn do
+                local ct, vmaj, vmin, hi, lo = sbuf:byte(pos, pos + 4)
+                if not ct or ct < 20 or ct > 23 or vmaj ~= 3 or vmin > 4 then
+                    break
+                end
+                if ct == 23 then
+                    tls_kind = "appdata"
+                    break
+                elseif ct == 21 then
+                    saw_alert = true
+                else
+                    saw_ctl = true
+                end
+                pos = pos + 5 + (hi * 256 + lo)
+            end
+            if tls_kind ~= "appdata" then
+                if saw_alert then
+                    tls_kind = "alert"
+                elseif saw_ctl then
+                    tls_kind = "control"
+                end
+            end
+        end
+    end
+
     if not desync.outgoing then
         if st.armed and plen > 0 then
+            if tls_kind == "control" then
+                return
+            end
             cancel_stall_timer(st)
             st.armed = false
             crec.z2k_sg_done = true
+            if instance_cutoff_shim then
+                instance_cutoff_shim(ctx, desync)
+            elseif instance_cutoff then
+                instance_cutoff(ctx, desync)
+            end
             return
         end
         if not st.saw_server_hello then
@@ -969,6 +1042,9 @@ function z2k_autopilot_stall_guard(_, desync)
     end
 
     if st.saw_server_hello and not st.armed and plen > 0 then
+        if tls_kind == "control" or tls_kind == "alert" then
+            return
+        end
         local entry, header = z2k_autopilot_lookup_dis(dis)
         if not z2k_autopilot_safety_fuse(header) then
             return

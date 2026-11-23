@@ -1613,9 +1613,9 @@ generate_nfqws2_opt_from_strategies() {
     local Z2K_GV_AUTOPILOT_STEPS=""
     if [ "$Z2K_AUTOPILOT_ACTIVE" = "1" ]; then
         if [ -n "$Z2K_PREFLIGHT_STEP" ]; then
-            Z2K_GV_AUTOPILOT_STEPS="--in-range=a --out-range=a --lua-desync=z2k_autopilot_tcp_fastfail $Z2K_PREFLIGHT_STEP --lua-desync=z2k_autopilot_stall_guard"
+            Z2K_GV_AUTOPILOT_STEPS="--in-range=a --out-range=a --payload=all --lua-desync=z2k_autopilot_tcp_fastfail $Z2K_PREFLIGHT_STEP --lua-desync=z2k_autopilot_stall_guard"
         else
-            Z2K_GV_AUTOPILOT_STEPS="--in-range=a --out-range=a --lua-desync=z2k_autopilot_tcp_fastfail --lua-desync=z2k_autopilot_stall_guard"
+            Z2K_GV_AUTOPILOT_STEPS="--in-range=a --out-range=a --payload=all --lua-desync=z2k_autopilot_tcp_fastfail --lua-desync=z2k_autopilot_stall_guard"
         fi
     else
         Z2K_GV_AUTOPILOT_STEPS="$Z2K_PREFLIGHT_STEP"
@@ -1626,7 +1626,7 @@ generate_nfqws2_opt_from_strategies() {
     if [ "$Z2K_REFACTOR_PHASE3" != "1" ]; then
         local _yt_emit="$youtube_tcp"
         if [ "$Z2K_AUTOPILOT_ACTIVE" = "1" ]; then
-            _yt_emit=$(inject_z2k_step "$_yt_emit" "--in-range=a --out-range=a --lua-desync=z2k_autopilot_observe")
+            _yt_emit=$(inject_z2k_step "$_yt_emit" "--in-range=a --out-range=a --payload=all --lua-desync=z2k_autopilot_observe")
         fi
         add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "$wl_excl --hostlist-domains=c.youtube.com $_yt_emit --new"
     fi
@@ -1695,7 +1695,7 @@ generate_nfqws2_opt_from_strategies() {
         merged_google_tls=$(printf '%s' "$youtube_tcp" | sed 's/key=yt_tcp/key=google_tls/')
         merged_google_tls="$merged_google_tls $gv_strategies_only"
         if [ "$Z2K_AUTOPILOT_ACTIVE" = "1" ]; then
-            merged_google_tls=$(inject_z2k_step "$merged_google_tls" "--in-range=a --out-range=a --lua-desync=z2k_autopilot_tcp_fastfail --lua-desync=z2k_autopilot_stall_guard")
+            merged_google_tls=$(inject_z2k_step "$merged_google_tls" "--in-range=a --out-range=a --payload=all --lua-desync=z2k_autopilot_tcp_fastfail --lua-desync=z2k_autopilot_stall_guard")
         fi
         add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/TCP/YT/List.txt --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt $merged_google_tls --new"
     else
@@ -1759,7 +1759,14 @@ generate_nfqws2_opt_from_strategies() {
         if [ "$yt_quic_off" = "1" ] || [ "$category_youtube" = 0 ]; then
             ap_quic_arg=":yt=0"
         fi
-        quic_udp=$(inject_z2k_step "$quic_udp" "--in-range=x --out-range=a --lua-desync=z2k_autopilot_quic${ap_quic_arg}")
+        case "$quic_udp" in
+            *"--in-range=a --out-range=a --payload=all"*"--lua-desync=circular"*)
+                quic_udp=$(inject_z2k_step "$quic_udp" "--in-range=x --out-range=a --payload=quic_initial --lua-desync=z2k_autopilot_quic${ap_quic_arg}")
+                ;;
+            *)
+                quic_udp=$(inject_z2k_step "$quic_udp" "--in-range=x --out-range=a --payload=quic_initial --lua-desync=z2k_autopilot_quic${ap_quic_arg} --in-range=a --out-range=a --payload=all")
+                ;;
+        esac
     fi
 
     local quic_lists="" quic_anchor=""

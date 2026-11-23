@@ -61,7 +61,7 @@ run_gen() {
 
 extract_opt() {
     # shellcheck disable=SC1090
-    sh -c 'NFQWS2_OPT=""; . "$1" >/dev/null 2>&1 || :; printf "%s" "$NFQWS2_OPT"' _ "$1"
+    CFG_EXTRACT_PATH="$1" sh -c 'NFQWS2_OPT=""; . "$CFG_EXTRACT_PATH" >/dev/null 2>&1 || :; printf "%s" "$NFQWS2_OPT"'
 }
 
 R1=$(make_root fresh)
@@ -148,6 +148,66 @@ if has 'key=google_tls' "$OPTP3" && has 'z2k_autopilot_tcp_fastfail' "$OPTP3" \
     ok "Phase 3 google_tls includes autopilot TCP guards without preflight"
 else
     bad "Phase 3 wiring wrong"
+fi
+
+# 2a. Дополнительные edge-case Lua-тесты (TLS 1.2, TCP FIN/RST, gfe observe, /24 prefix, giveup cleanup)
+if lua "$ROOT/tests/test_z2k_gv_autopilot_edge.lua"; then
+    ok "test_z2k_gv_autopilot_edge.lua"
+else
+    bad "test_z2k_gv_autopilot_edge.lua failed"
+fi
+
+# 2b. Кастомная QUIC-стратегия без --in-range=a не утекает --in-range=x в circular
+RCQ=$(make_root custom_quic)
+mkdir -p "$RCQ/lists/custom-strategies"
+printf '%s\n' '--lua-desync=circular:fails=3:time=60:udp_in=1:udp_out=5:key=quic:nld=2 --lua-desync=fake:payload=quic_initial:repeats=2' \
+    > "$RCQ/lists/custom-strategies/quic.txt"
+run_gen "$RCQ" >/dev/null
+OPTCQ=$(extract_opt "$RCQ/config")
+if has '--payload=quic_initial --lua-desync=z2k_autopilot_quic --in-range=a --out-range=a --payload=all --lua-desync=circular' "$OPTCQ"; then
+    ok "custom QUIC restores --in-range=a --out-range=a --payload=all before circular"
+else
+    bad "custom QUIC leaked --in-range=x or omitted --payload=all"
+fi
+
+# 2c. Phase 3 имеет --payload=all перед fastfail/stall_guard
+if has '--in-range=a --out-range=a --payload=all --lua-desync=z2k_autopilot_tcp_fastfail --lua-desync=z2k_autopilot_stall_guard' "$OPTP3"; then
+    ok "Phase 3 emits --payload=all before autopilot TCP guards"
+else
+    bad "Phase 3 missing --payload=all before autopilot TCP guards"
+fi
+
+# 2d. Z2K_GV_SERVER_REPLY2=0 + Z2K_YT_AUTOPILOT=1: --payload=all в gv_tcp, S99 не включает gvsub без Z2K_GV_SERVER_REPLY2=1
+RSR0=$(make_root sr0_ap1)
+printf 'ENABLED=1\nZ2K_GV_SERVER_REPLY2=0\nZ2K_YT_AUTOPILOT=1\n' > "$RSR0/config"
+run_gen "$RSR0" >/dev/null
+OPTSR0=$(extract_opt "$RSR0/config")
+if has '--in-range=a --out-range=a --payload=all --lua-desync=z2k_autopilot_tcp_fastfail --lua-desync=z2k_autopilot_stall_guard' "$OPTSR0" \
+   && nhas 'z2k_preflight' "$OPTSR0"; then
+    ok "Z2K_GV_SERVER_REPLY2=0 + Z2K_YT_AUTOPILOT=1 emits --payload=all without preflight"
+else
+    bad "Z2K_GV_SERVER_REPLY2=0 + Z2K_YT_AUTOPILOT=1 wiring wrong"
+fi
+if grep -qE '^    \[ "\$\{Z2K_GV_SERVER_REPLY2:-1\}" = "1" \] \|\| return 1$' "$ROOT/files/S99zapret2.new"; then
+    ok "S99 z2k_gvsub_enabled stays gated on Z2K_GV_SERVER_REPLY2 (no DNS blackhole)"
+else
+    bad "S99 z2k_gvsub_enabled has mismatched Z2K_YT_AUTOPILOT gate"
+fi
+
+# 2e. z2k_preflight_v6_gate сохраняет fastfail и stall_guard при удалении :v6
+V6_OUT=$(ROOT_PATH="$ROOT" sh -c '
+    NFQWS2_OPT="--in-range=a --out-range=a --payload=all --lua-desync=z2k_autopilot_tcp_fastfail --in-range=a --out-range=a --payload=all --lua-desync=z2k_preflight:pos=none:pieces=1:keepts:sni=www.google.com:timeout=4:v6 --lua-desync=z2k_autopilot_stall_guard"
+    DISABLE_IPV6=1
+    eval "$(awk "/^z2k_preflight_v6_gate\(\)/,/^}/" "$ROOT_PATH/files/S99zapret2.new")"
+    z2k_preflight_v6_gate >/dev/null
+    printf "%s" "$NFQWS2_OPT"
+')
+if has 'z2k_autopilot_tcp_fastfail' "$V6_OUT" && has 'z2k_autopilot_stall_guard' "$V6_OUT" \
+   && has 'z2k_preflight:pos=none:pieces=1:keepts:sni=www.google.com:timeout=4' "$V6_OUT" \
+   && nhas ':v6' "$V6_OUT"; then
+    ok "z2k_preflight_v6_gate strips :v6 cleanly without breaking autopilot steps"
+else
+    bad "z2k_preflight_v6_gate corrupted NFQWS2_OPT ($V6_OUT)"
 fi
 
 # 3. Порядок загрузки в S99zapret2.new, NAT masquerade и уборка
