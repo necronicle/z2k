@@ -211,3 +211,33 @@ func TestSharedIPYouTubeCacheAndRedirector(t *testing.T) {
 		t.Fatalf("SharedGFE clobbered YouTubeCache provider marker: %q (%v)", nb, err)
 	}
 }
+
+func TestRestoreKeepsISPHostClusterWhileCleaningSharedGFEAndYouTube(t *testing.T) {
+	s, _, _, _ := newSvc()
+	t.Cleanup(s.Shutdown)
+	dir := t.TempDir()
+	s.IPFile, s.StatusPath = dir+"/ips", dir+"/status"
+	isp4 := netip.MustParseAddr("46.61.136.172")
+	isp6 := netip.MustParseAddr("2a01:620:1:a053::e")
+
+	wait(t, s.OnDNS("rr1---sn-isp.googlevideo.com", []netip.Addr{isp4, isp6}))
+	wait(t, s.OnDNS("redirector.googlevideo.com", []netip.Addr{bad}))
+	wait(t, s.OnDNS("rr1---sn-yt.c.youtube.com", []netip.Addr{netip.MustParseAddr("198.51.100.22")}))
+	s.writeStatus()
+
+	restored, _, _, _ := newSvc()
+	t.Cleanup(restored.Shutdown)
+	restored.IPFile, restored.StatusPath = s.IPFile, s.StatusPath
+	if restored.Restore() != 4 {
+		t.Fatalf("expected 4 restored entries, got %d", len(restored.known))
+	}
+	restored.writeIPs()
+	got, err := os.ReadFile(s.IPFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ipFileSentinels + isp6.String() + "\n" + isp4.String() + "\n"
+	if string(got) != want {
+		t.Fatalf("Restore IPFile = %q, want %q", string(got), want)
+	}
+}

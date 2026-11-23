@@ -518,6 +518,8 @@ for fw_tool in iptables ip6tables; do
         if [ "$table" = mangle ]; then
             "$fw_tool" -w -t mangle -F Z2K_MSS 2>/dev/null
             "$fw_tool" -w -t mangle -X Z2K_MSS 2>/dev/null && log_info "  Удалена mangle/Z2K_MSS ($fw_tool)"
+            "$fw_tool" -w -t mangle -F Z2K_POL 2>/dev/null
+            "$fw_tool" -w -t mangle -X Z2K_POL 2>/dev/null && log_info "  Удалена mangle/Z2K_POL ($fw_tool)"
         fi
         # 10.11.2026: после удаления службы отказ QUIC остаться не должен.
         if [ "$table" = filter ]; then

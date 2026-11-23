@@ -50,8 +50,9 @@ local function load_neutral_map()
     return map
 end
 
--- gvsub публикует bad/dead узлы и локальные QUIC reject.
-function z2k_gvsub_neutral(desync, crec)
+-- gvsub публикует bad/dead/probe узлы и локальные QUIC reject.
+-- probe_only=true проверяет только probe-охранники (для общих профилей вроде rkn_tcp).
+function z2k_gvsub_neutral(desync, crec, probe_only)
     local dis = desync.dis or {}
     local ip = (dis.udp or dis.tcp) and (dis.ip6 or dis.ip)
     local addr = ip and (desync.outgoing and (ip.ip6_dst or ip.ip_dst)
@@ -65,8 +66,12 @@ function z2k_gvsub_neutral(desync, crec)
     local map = load_neutral_map()
     for key in pairs(keys) do
         local e = map[key]
-        if e and (e.bad or e.dead or (e.reject and dis.udp)) then
-            return true
+        if e then
+            if probe_only then
+                if e.probe then return true end
+            elseif e.bad or e.dead or e.probe or (e.reject and dis.udp) then
+                return true
+            end
         end
     end
     return false

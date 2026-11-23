@@ -5478,8 +5478,9 @@ _z2k_sweep_our_rules() {
     _q=$(sed -n 's/^QNUM=//p' "${ZAPRET2_DIR:-/opt/zapret2}/config" 2>/dev/null | tail -n 1 | tr -d "\"'")
     case "$_q" in ''|*[!0-9]*) _q=200 ;; esac
     # Z2K_GVSUB — цепочки подмены; Z2K_MSS — ограничение входящего MSS (p-88.1,
-    # прыжок ставится без комментария z2k); очередь 210 — ответы DNS для gvsub.
-    _pat="z2k|Z2K_GVSUB|Z2K_MSS|--queue-num 210( |\$)"
+    # прыжок ставится без комментария z2k); Z2K_POL — исключение по политике;
+    # очередь 210 — ответы DNS для gvsub.
+    _pat="z2k|Z2K_GVSUB|Z2K_MSS|Z2K_POL|--queue-num 210( |\$)"
     _z2k_foreign_engine || _pat="--queue-num $_q( |\$)|$_pat"
     for _tool in iptables ip6tables; do
         command -v "$_tool" >/dev/null 2>&1 || continue
@@ -5495,6 +5496,8 @@ _z2k_sweep_our_rules() {
             if [ "$_t" = mangle ]; then
                 "$_tool" -w -t mangle -F Z2K_MSS 2>/dev/null
                 "$_tool" -w -t mangle -X Z2K_MSS 2>/dev/null
+                "$_tool" -w -t mangle -F Z2K_POL 2>/dev/null
+                "$_tool" -w -t mangle -X Z2K_POL 2>/dev/null
             fi
             # 10.11.2026: после удаления службы отказ QUIC остаться не должен.
             if [ "$_t" = filter ]; then

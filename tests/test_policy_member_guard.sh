@@ -57,8 +57,9 @@ FNS="$TMP/fns.sh"
     extract_fn z2k_policy_id             "$INIT"; echo
     extract_fn z2k_policy_members        "$INIT"; echo
     extract_fn z2k_policy_connmark_start "$INIT"; echo
+    extract_fn z2k_policy_connmark_stop  "$INIT"; echo
 } > "$FNS"
-for f in z2k_fw_is_iptables z2k_ndmc_bin z2k_policy_id z2k_policy_members z2k_policy_connmark_start; do
+for f in z2k_fw_is_iptables z2k_ndmc_bin z2k_policy_id z2k_policy_members z2k_policy_connmark_start z2k_policy_connmark_stop; do
     grep -q "^$f()" "$FNS" && ok "extracted $f()" \
                            || no "extracted $f()" "a definition" "none"
 done
@@ -178,17 +179,164 @@ case "$out" in
 esac
 # include mode (POLICY_EXCLUDE=0) means "only policy traffic is processed", so the
 # exclude bit goes on everything that is NOT the policy mark.
-grep -q 'mark ! --mark' "$TMP/ipt.log" \
+grep -E '(^| )(-I|-A) ' "$TMP/ipt.log" | grep -q 'mark ! --mark' \
     && ok "include mode negates the mark match" \
     || no "include mode negates the mark match" "! --mark" "$(tr '\n' ';' < "$TMP/ipt.log")"
 
 out=$(run_start z2ktest 1)
-grep -q 'mark ! --mark' "$TMP/ipt.log" \
+grep -E '(^| )(-I|-A) ' "$TMP/ipt.log" | grep -q 'mark ! --mark' \
     && no "exclude mode does NOT negate the mark match" "--mark" "$(tr '\n' ';' < "$TMP/ipt.log")" \
     || ok "exclude mode does NOT negate the mark match"
-grep -q -- '-m mark --mark' "$TMP/ipt.log" \
+grep -E '(^| )(-I|-A) ' "$TMP/ipt.log" | grep -q -- '-m mark --mark' \
     && ok "exclude mode marks the policy traffic itself" \
     || no "exclude mode marks the policy traffic itself" "-m mark --mark" "$(tr '\n' ';' < "$TMP/ipt.log")"
+
+# =============================================================================
+# 3b. Z2K_POL chain (POLICY_EXCLUDE=0 + DESYNC_MARK) and cleanup via stop()
+# =============================================================================
+# Verify include mode installs Z2K_POL with DESYNC_MARK RETURN before CONNMARK,
+# never combines two '-m mark' matches in one rule, and jumps from POSTROUTING.
+run_start_cfg() {
+    mk_hotspot z2ktest
+    : > "$TMP/ipt.log"
+    : > "$TMP/ip6t.log"
+    cat > "$TMP/s.sh" <<EOF
+FWTYPE=iptables
+Z2K_CONNMARK_OK4=1
+Z2K_CONNMARK_OK6=$1
+Z2K_CONNMARK_EXCLUDE="0x20000000/0x20000000"
+DESYNC_MARK="$2"
+POLICY_NAME="z2k-test-temp"
+POLICY_EXCLUDE=0
+Z2K_POLICY_MARK="ffffaab/0x0fffffff"
+z2k_detect_policy_mark() { return 0; }
+get_wan_ifaces4() { echo ppp0; }
+get_wan_ifaces6() { echo ppp0; }
+iptablesw() { printf '%s\n' "\$*" >> "$TMP/ipt.log"; return 1; }
+ip6tablesw() { printf '%s\n' "\$*" >> "$TMP/ip6t.log"; return 1; }
+. "$FNS"
+z2k_policy_connmark_start
+EOF
+    PATH="$BIN:$PATH" sh "$TMP/s.sh" 2>&1
+}
+
+run_start_cfg 1 "" >/dev/null
+grep -q -- '-t mangle -N Z2K_POL' "$TMP/ipt.log" \
+    && ok "include mode creates Z2K_POL chain (IPv4)" \
+    || no "include mode creates Z2K_POL chain (IPv4)" "-N Z2K_POL" "$(tr '\n' ';' < "$TMP/ipt.log")"
+grep -q -- '-t mangle -A Z2K_POL -m mark --mark 0x40000000/0x40000000 -j RETURN' "$TMP/ipt.log" \
+    && ok "include mode adds default DESYNC_MARK RETURN rule in Z2K_POL" \
+    || no "include mode adds default DESYNC_MARK RETURN rule" "0x40000000/0x40000000 -j RETURN" "$(tr '\n' ';' < "$TMP/ipt.log")"
+ret_line=$(grep -n -- '-A Z2K_POL -m mark --mark 0x40000000/0x40000000 -j RETURN' "$TMP/ipt.log" | head -n1 | cut -d: -f1)
+cm_line=$(grep -n -- '-A Z2K_POL -m mark ! --mark ffffaab/0x0fffffff -j CONNMARK --set-xmark 0x20000000/0x20000000' "$TMP/ipt.log" | head -n1 | cut -d: -f1)
+if [ -n "$ret_line" ] && [ -n "$cm_line" ] && [ "$ret_line" -lt "$cm_line" ]; then
+    ok "Z2K_POL places DESYNC_MARK RETURN before CONNMARK exclude rule ($ret_line < $cm_line)"
+else
+    no "Z2K_POL rule order" "RETURN before CONNMARK" "$ret_line vs $cm_line"
+fi
+grep -q -- '-t mangle -I POSTROUTING -o ppp0 -j Z2K_POL' "$TMP/ipt.log" \
+    && ok "include mode jumps POSTROUTING -> Z2K_POL (IPv4)" \
+    || no "include mode jumps POSTROUTING -> Z2K_POL (IPv4)" "-I POSTROUTING -o ppp0 -j Z2K_POL" "$(tr '\n' ';' < "$TMP/ipt.log")"
+grep -q -- '-t mangle -A Z2K_POL -m mark --mark 0x40000000/0x40000000 -j RETURN' "$TMP/ip6t.log" \
+    && grep -q -- '-t mangle -I POSTROUTING -o ppp0 -j Z2K_POL' "$TMP/ip6t.log" \
+    && ok "include mode installs Z2K_POL on IPv6 when Z2K_CONNMARK_OK6=1" \
+    || no "include mode installs Z2K_POL on IPv6" "Z2K_POL rules" "$(tr '\n' ';' < "$TMP/ip6t.log")"
+
+two_marks=$(grep -E -- '-m mark.*-m mark' "$TMP/ipt.log" "$TMP/ip6t.log" | wc -l | tr -d ' ')
+[ "$two_marks" = 0 ] && ok "no single iptables rule contains two '-m mark' matches" \
+                     || no "no single iptables rule contains two '-m mark' matches" 0 "$two_marks"
+
+run_start_cfg 0 "0x80000000" >/dev/null
+grep -q -- '-t mangle -A Z2K_POL -m mark --mark 0x80000000/0x80000000 -j RETURN' "$TMP/ipt.log" \
+    && ok "include mode honors custom DESYNC_MARK override" \
+    || no "include mode honors custom DESYNC_MARK override" "0x80000000/0x80000000" "$(tr '\n' ';' < "$TMP/ipt.log")"
+run_start_cfg 0 "0x80000000/0xf0000000" >/dev/null
+grep -q -- '-t mangle -A Z2K_POL -m mark --mark 0x80000000/0xf0000000 -j RETURN' "$TMP/ipt.log" \
+    && ok "include mode preserves explicit DESYNC_MARK mask" \
+    || no "include mode preserves explicit DESYNC_MARK mask" "0x80000000/0xf0000000" "$(tr '\n' ';' < "$TMP/ipt.log")"
+
+# Stateful mock for stop() & legacy direct rule migration cleanup
+: > "$TMP/state4.rules"
+: > "$TMP/state6.rules"
+printf '%s\n' \
+    "-t mangle POSTROUTING -o ppp0 -m mark ! --mark ffffaab/0x0fffffff -j CONNMARK --set-xmark 0x20000000/0x20000000" \
+    "-t mangle POSTROUTING -o ppp0 -m mark --mark ffffaab/0x0fffffff -j CONNMARK --set-xmark 0x20000000/0x20000000" \
+    > "$TMP/state4.rules"
+cat > "$TMP/stop_check.sh" <<EOF
+FWTYPE=iptables
+Z2K_CONNMARK_OK4=1
+Z2K_CONNMARK_OK6=1
+Z2K_CONNMARK_EXCLUDE="0x20000000/0x20000000"
+DESYNC_MARK="0x40000000"
+POLICY_NAME="z2k-test-temp"
+POLICY_EXCLUDE=0
+Z2K_POLICY_MARK="ffffaab/0x0fffffff"
+z2k_detect_policy_mark() { return 0; }
+get_wan_ifaces4() { echo ppp0; }
+get_wan_ifaces6() { echo ppp0; }
+_mock_ipt() {
+    local sf="\$1"; shift
+    case " \$* " in
+        *" -C "*)
+            local pat
+            pat=\$(printf '%s\n' "\$*" | sed 's/ -C / /')
+            grep -Fqx -- "\$pat" "\$sf"
+            return \$?
+            ;;
+        *" -I "*|*" -A "*)
+            local r
+            r=\$(printf '%s\n' "\$*" | sed 's/ -I / /; s/ -A / /')
+            printf '%s\n' "\$r" >> "\$sf"
+            return 0
+            ;;
+        *" -D "*)
+            local pat
+            pat=\$(printf '%s\n' "\$*" | sed 's/ -D / /')
+            if grep -Fqx -- "\$pat" "\$sf"; then
+                grep -Fvx -- "\$pat" "\$sf" > "\$sf.tmp" 2>/dev/null || :
+                mv "\$sf.tmp" "\$sf"
+                return 0
+            fi
+            return 1
+            ;;
+        *" -F Z2K_POL"*)
+            printf '%s\n' "\$*" >> "\$sf.ops"
+            grep -v '^-t mangle Z2K_POL ' "\$sf" > "\$sf.tmp" 2>/dev/null || :
+            mv "\$sf.tmp" "\$sf"
+            return 0
+            ;;
+        *" -N Z2K_POL"*|*" -X Z2K_POL"*)
+            printf '%s\n' "\$*" >> "\$sf.ops"
+            return 0
+            ;;
+    esac
+    return 0
+}
+iptablesw()  { _mock_ipt "$TMP/state4.rules" "\$@"; }
+ip6tablesw() { _mock_ipt "$TMP/state6.rules" "\$@"; }
+. "$FNS"
+z2k_policy_connmark_start
+grep -Fqx -- '-t mangle POSTROUTING -o ppp0 -j Z2K_POL' "$TMP/state4.rules" || exit 11
+grep -Fqx -- '-t mangle POSTROUTING -o ppp0 -m mark ! --mark ffffaab/0x0fffffff -j CONNMARK --set-xmark 0x20000000/0x20000000' "$TMP/state4.rules" && exit 12
+grep -Fqx -- '-t mangle POSTROUTING -o ppp0 -m mark --mark ffffaab/0x0fffffff -j CONNMARK --set-xmark 0x20000000/0x20000000' "$TMP/state4.rules" && exit 17
+POLICY_EXCLUDE=1
+z2k_policy_connmark_start
+grep -Fqx -- '-t mangle POSTROUTING -o ppp0 -j Z2K_POL' "$TMP/state4.rules" && exit 18
+grep -Fqx -- '-t mangle POSTROUTING -o ppp0 -m mark --mark ffffaab/0x0fffffff -j CONNMARK --set-xmark 0x20000000/0x20000000' "$TMP/state4.rules" || exit 19
+z2k_policy_connmark_stop
+[ ! -s "$TMP/state4.rules" ] || exit 13
+[ ! -s "$TMP/state6.rules" ] || exit 14
+grep -q -- '-t mangle -X Z2K_POL' "$TMP/state4.rules.ops" || exit 15
+grep -q -- '-t mangle -X Z2K_POL' "$TMP/state6.rules.ops" || exit 16
+EOF
+: > "$TMP/state4.rules.ops"
+: > "$TMP/state6.rules.ops"
+mk_hotspot z2ktest
+if PATH="$BIN:$PATH" sh "$TMP/stop_check.sh"; then
+    ok "legacy rule cleanup + Z2K_POL start/stop symmetry (IPv4+IPv6) passes"
+else
+    no "legacy rule cleanup + Z2K_POL start/stop symmetry" "exit 0" "exit $?"
+fi
 
 # A policy whose NDM name cannot be read is also not something to guess at.
 out=$(mk_hotspot z2ktest; : > "$TMP/policy.out"; run_start z2ktest 0)

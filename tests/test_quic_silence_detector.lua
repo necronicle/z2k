@@ -181,6 +181,23 @@ H.test('dead and bad neutralize both gv_tcp and yt_tcp across sub-second reloads
         end
     end
 end)
+H.test('probe guard neutralizes gv_tcp, yt_tcp, google_tls, rkn_tcp and QUIC without counting failures',function()
+    neutral='probe 4a7d6e46\n'
+    for _, key in ipairs({'gv_tcp', 'yt_tcp', 'google_tls', 'rkn_tcp'}) do
+        local d=remote(H.tcp(nil,true,1,H.client,'tls_client_hello',true)); d.arg.key=key
+        local h,c=H.step(d); h.failure_counter=1
+        H.step(d); H.step(d)
+        H.eq(true,c.neutral); H.eq(nil,c.failure); H.eq(1,h.failure_counter)
+    end
+    local dq=remote(H.qstart()); local hq,cq=H.step(dq)
+    H.advance(6); H.eq(true,cq.neutral); H.eq(nil,hq.failure_counter)
+end)
+H.test('rkn_tcp ignores bad/dead entries and only honors probe guard',function()
+    neutral='bad 4a7d6e46\ndead 4a7d6e46\n'
+    local d=remote(H.tcp(nil,true,1,H.client,'tls_client_hello',true)); d.arg.key='rkn_tcp'
+    local h,c=H.step(d); H.step(d); H.step(d)
+    H.eq(nil,c.neutral); H.eq(true,c.failure); H.eq(1,h.failure_counter)
+end)
 H.test('neutral RAM cache obeys ~1s TTL and handles negative cache',function()
     local opens, cached_text = 0, nil
     io.open=function(path, ...)
