@@ -333,6 +333,7 @@ func (s *Service) runProbe(pctx context.Context, a netip.Addr) {
 	baseRTT := s.baselineRTTMs
 	ggcRTT := s.ggcRTTMs
 	mark := s.policyMark
+	_, hasGVCens := s.censorshipStateLocked()
 	var pfxRTT int64
 	if ps != nil {
 		pfxRTT = ps.rttMs
@@ -344,12 +345,15 @@ func (s *Service) runProbe(pctx context.Context, a netip.Addr) {
 
 	var releasePfx func()
 	skipC2HTTP := false
-	checkQUIC := kind.IsCluster()
+	// Когда ТСПУ на googlevideo уже доказано, policy всё равно принудительно выставляет
+	// quic_ok=0 для google и isp. Пропуск QUIC-пробы экономит слоты probeSem (MaxProbes=3)
+	// и заметно ускоряет классификацию новых мобильных IP.
+	checkQUIC := kind.IsCluster() && !(hasGVCens && (kind == KindGVCacheGoogle || kind == KindGVCacheISP))
 
-	// Для Google / Play сериализуем и дедуплицируем C2-проверки по /24 (IPv4) и /48 (IPv6).
+	// Для Google / Play сериализуем и дедуплицируем C2-проверки по /24 (IPv4) и /64 (IPv6).
 	// ISP GGC (KindGVCacheISP) всегда проверяется индивидуально по каждому IP.
 	if kind != KindGVCacheISP && pfx.IsValid() {
-		releasePfx, skipC2HTTP, checkQUIC = s.acquirePrefixGuard(pctx, pfx, kind.IsCluster())
+		releasePfx, skipC2HTTP, checkQUIC = s.acquirePrefixGuard(pctx, pfx, checkQUIC)
 		if releasePfx != nil {
 			defer releasePfx()
 		}
@@ -422,7 +426,7 @@ func (s *Service) runProbe(pctx context.Context, a netip.Addr) {
 			}
 		}
 
-		// Если контур C2 был пропущен по дедупликации префикса (/24 или /48),
+		// Если контур C2 был пропущен по дедупликации префикса (/24 или /64),
 		// подставляем актуальный C2-вердикт и статус QUIC из префикса.
 		ps := s.prefixes[pfx]
 		if res.Verdict == VerdictUnknown && skipC2HTTP && ps != nil && ps.c2Checked {
@@ -485,7 +489,7 @@ func (s *Service) runProbe(pctx context.Context, a netip.Addr) {
 				}
 			} else {
 				// Для ISP GGC префикс не участвует в C2/L3 дедупликации; при смешанных
-				// вердиктах разных IP внутри одного /24 или /48 возвращаем unknown.
+				// вердиктах разных IP внутри одного /24 или /64 возвращаем unknown.
 				ps.verdict = s.ispPrefixSummaryLocked(pfx)
 				ps.checked = now
 				if res.QUICChecked {

@@ -152,7 +152,7 @@ func CalibrateTiming(baselineRTTMs, prefixRTTMs, ggcRTTMs int64) TimingParams {
 	return tp
 }
 
-// PrefixFor возвращает /24 для IPv4 или /48 для IPv6.
+// PrefixFor возвращает /24 для IPv4 или /64 для IPv6 (уровень кэш-кластера sn-*).
 func PrefixFor(addr netip.Addr) netip.Prefix {
 	a := addr.Unmap()
 	if !a.IsValid() {
@@ -161,7 +161,7 @@ func PrefixFor(addr netip.Addr) netip.Prefix {
 	if a.Is4() {
 		return netip.PrefixFrom(a, 24).Masked()
 	}
-	return netip.PrefixFrom(a, 48).Masked()
+	return netip.PrefixFrom(a, 64).Masked()
 }
 
 // Checker проверяет адрес (интерфейс совместимости PR 1).

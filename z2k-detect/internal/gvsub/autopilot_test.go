@@ -603,13 +603,14 @@ func TestConcurrencyCapMax3AndPrefixDedupVsISPPerIP(t *testing.T) {
 	}
 	t.Cleanup(s.Shutdown)
 
-	// Запускаем пачкой 3 адреса в одном /24, 2 в одном /48 и 3 ISP-адреса в одном /48 (= 8 адресов).
+	// Запускаем пачкой 3 адреса в одном /24, 3 в двух разных /64 и 3 ISP-адреса (= 9 адресов).
 	gAddrs := []netip.Addr{
 		netip.MustParseAddr("74.125.99.17"),
 		netip.MustParseAddr("74.125.99.18"),
 		netip.MustParseAddr("74.125.99.19"),
 		netip.MustParseAddr("2a00:1450:400f::1"),
 		netip.MustParseAddr("2a00:1450:400f::2"),
+		netip.MustParseAddr("2a00:1450:400f:6::1"),
 	}
 	ispAddrs := []netip.Addr{
 		netip.MustParseAddr("2a01:620:1:a053::c"),
@@ -624,7 +625,8 @@ func TestConcurrencyCapMax3AndPrefixDedupVsISPPerIP(t *testing.T) {
 	sp.mu.Lock()
 	maxAct := sp.maxActive
 	c2v4 := sp.c2Calls[netip.MustParsePrefix("74.125.99.0/24")]
-	c2v6 := sp.c2Calls[netip.MustParsePrefix("2a00:1450:400f::/48")]
+	c2v6 := sp.c2Calls[netip.MustParsePrefix("2a00:1450:400f::/64")]
+	c2v6b := sp.c2Calls[netip.MustParsePrefix("2a00:1450:400f:6::/64")]
 	ispC := sp.probeCalls[netip.MustParseAddr("2a01:620:1:a053::c")]
 	ispD := sp.probeCalls[netip.MustParseAddr("2a01:620:1:a053::d")]
 	ispE := sp.probeCalls[netip.MustParseAddr("2a01:620:1:a053::e")]
@@ -633,8 +635,8 @@ func TestConcurrencyCapMax3AndPrefixDedupVsISPPerIP(t *testing.T) {
 	if maxAct > 3 || maxAct == 0 {
 		t.Fatalf("semaphore cap violated: maxActive=%d (want 1..3)", maxAct)
 	}
-	if c2v4 != 1 || c2v6 != 1 {
-		t.Fatalf("expected 1 C2 per /24 and /48, got v4=%d v6=%d", c2v4, c2v6)
+	if c2v4 != 1 || c2v6 != 1 || c2v6b != 1 {
+		t.Fatalf("expected 1 C2 per /24 and independent /64 clusters, got v4=%d v6a=%d v6b=%d", c2v4, c2v6, c2v6b)
 	}
 	if ispC != 1 || ispD != 1 || ispE != 1 {
 		t.Fatalf("ISP GGC IPs must each be probed individually: c=%d d=%d e=%d", ispC, ispD, ispE)
@@ -995,7 +997,7 @@ func TestBlockPortalStrictHostMatchingAndBudgetAndMixedPrefixSafety(t *testing.T
 		t.Fatal("runProbe budget did not include sequential C1 + C2 HTTP + 2x QUIC headroom")
 	}
 
-	// 6. Mixed ISP /48 prefix produces deterministic VerdictUnknown on prefix row (never masks DeadGGC with GoodGGC).
+	// 6. Mixed ISP /64 prefix produces deterministic VerdictUnknown on prefix row while sibling /64 stays good_ggc.
 	sISP := &Service{
 		Prober: &scriptProber{
 			onProbe: func(req ProbeRequest) ProbeResult {
@@ -1013,17 +1015,74 @@ func TestBlockPortalStrictHostMatchingAndBudgetAndMixedPrefixSafety(t *testing.T
 	wait(t, sISP.OnDNS("rr1---sn-isp.googlevideo.com", []netip.Addr{
 		netip.MustParseAddr("2a01:620:1:a053::c"),
 		netip.MustParseAddr("2a01:620:1:a053::e"),
+		netip.MustParseAddr("2a01:620:1:a014::14"),
 	}))
 	polISP, err := os.ReadFile(sISP.PolicyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(polISP), "type=prefix\taddr=2a01:620:1::/48\tkind=isp\tverdict=unknown") {
-		t.Fatalf("expected deterministic unknown verdict on mixed ISP /48 prefix, got:\n%s", string(polISP))
+	if !strings.Contains(string(polISP), "type=prefix\taddr=2a01:620:1:a053::/64\tkind=isp\tverdict=unknown") {
+		t.Fatalf("expected deterministic unknown verdict on mixed ISP /64 prefix, got:\n%s", string(polISP))
+	}
+	if !strings.Contains(string(polISP), "type=prefix\taddr=2a01:620:1:a014::/64\tkind=isp\tverdict=good_ggc") {
+		t.Fatalf("expected independent sibling ISP /64 prefix to remain good_ggc, got:\n%s", string(polISP))
 	}
 	if !strings.Contains(string(polISP), "type=ip\taddr=2a01:620:1:a053::c\tkind=isp\tverdict=dead_ggc") ||
-		!strings.Contains(string(polISP), "type=ip\taddr=2a01:620:1:a053::e\tkind=isp\tverdict=good_ggc") {
+		!strings.Contains(string(polISP), "type=ip\taddr=2a01:620:1:a053::e\tkind=isp\tverdict=good_ggc") ||
+		!strings.Contains(string(polISP), "type=ip\taddr=2a01:620:1:a014::14\tkind=isp\tverdict=good_ggc") {
 		t.Fatalf("expected per-IP ISP verdicts in policy.dat, got:\n%s", string(polISP))
+	}
+}
+
+func TestSkipQUICWhenGVCensorshipProven(t *testing.T) {
+	dir := t.TempDir()
+	reqs := make(map[string]ProbeRequest)
+	s := &Service{
+		Prober: &scriptProber{
+			onProbe: func(req ProbeRequest) ProbeResult {
+				reqs[req.Addr.String()] = req
+				switch req.Addr.String() {
+				case "74.125.100.10":
+					return ProbeResult{Verdict: VerdictBadBypassable, RTT: 15 * time.Millisecond, TLSFast: true}
+				case "74.125.101.10":
+					return ProbeResult{Verdict: VerdictGoodGGC, RTT: 12 * time.Millisecond, TLSFast: true}
+				case "46.61.136.173":
+					return ProbeResult{Verdict: VerdictGoodGGC, RTT: 6 * time.Millisecond, TLSFast: true}
+				default:
+					return ProbeResult{Verdict: VerdictGoodDirect, RTT: 14 * time.Millisecond, TLSFast: true, QUICChecked: true, QUICOK: true}
+				}
+			},
+		},
+		StatusPath:  filepath.Join(dir, "status.json"),
+		PolicyPath:  filepath.Join(dir, "policy.dat"),
+		NeutralWait: -1,
+	}
+	t.Cleanup(s.Shutdown)
+
+	// 1. Первая проба googlevideo до доказательства ТСПУ проверяет QUIC и доказывает ТСПУ (bad_bypassable).
+	wait(t, s.OnDNS("rr1---sn-4g5e6nls.googlevideo.com", []netip.Addr{netip.MustParseAddr("74.125.100.10")}))
+	if !reqs["74.125.100.10"].CheckQUIC {
+		t.Fatalf("expected initial google probe before GV censorship to have CheckQUIC=true")
+	}
+
+	// 2. После доказанного ТСПУ на googlevideo последующие пробы KindGVCacheGoogle и KindGVCacheISP пропускают QUIC.
+	wait(t, s.OnDNS("rr2---sn-4g5e6nls.googlevideo.com", []netip.Addr{netip.MustParseAddr("74.125.101.10")}))
+	if reqs["74.125.101.10"].Kind != KindGVCacheGoogle || reqs["74.125.101.10"].CheckQUIC {
+		t.Fatalf("expected KindGVCacheGoogle with CheckQUIC=false after GV censorship, got kind=%v checkQUIC=%v",
+			reqs["74.125.101.10"].Kind, reqs["74.125.101.10"].CheckQUIC)
+	}
+
+	wait(t, s.OnDNS("rr1---sn-isp.googlevideo.com", []netip.Addr{netip.MustParseAddr("46.61.136.173")}))
+	if reqs["46.61.136.173"].Kind != KindGVCacheISP || reqs["46.61.136.173"].CheckQUIC {
+		t.Fatalf("expected KindGVCacheISP with CheckQUIC=false after GV censorship, got kind=%v checkQUIC=%v",
+			reqs["46.61.136.173"].Kind, reqs["46.61.136.173"].CheckQUIC)
+	}
+
+	// 3. KindPlayCache (gvt1.com) не зависит от GV-цензуры и продолжает получать CheckQUIC=true.
+	wait(t, s.OnDNS("r1---sn-4g5e6nls.gvt1.com", []netip.Addr{netip.MustParseAddr("74.125.102.10")}))
+	if reqs["74.125.102.10"].Kind != KindPlayCache || !reqs["74.125.102.10"].CheckQUIC {
+		t.Fatalf("expected KindPlayCache with CheckQUIC=true, got kind=%v checkQUIC=%v",
+			reqs["74.125.102.10"].Kind, reqs["74.125.102.10"].CheckQUIC)
 	}
 }
 

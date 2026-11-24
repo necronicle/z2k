@@ -108,7 +108,7 @@ func Run(parent context.Context, cfg Config) error {
 
 	go func() {
 		recheck := time.NewTicker(RecheckEvery)
-		obsPoll := time.NewTicker(2 * time.Second)
+		obsPoll := time.NewTicker(250 * time.Millisecond)
 		defer recheck.Stop()
 		defer obsPoll.Stop()
 		for {
