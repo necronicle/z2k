@@ -856,5 +856,62 @@ do
   f:close()
 end
 
+-- T129: auto_pinned Anti-Drift: серия из 3 подтверждённых здоровых (non-neutral)
+-- соединений защищает текущую стратегию от единичного шумового сбоя, сохраняя
+-- совместимый 6-колоночный state.tsv с mode="auto".
+do
+  fresh()
+  now = 13000
+  for i = 1, 3 do
+    circular(nil, mk("rkn_tcp", "pinned-auto.example", { crec = { nocheck = true } }))
+    check("T129: neutral=false success " .. i .. " counted", true, true)
+  end
+  check("T129: auto_pinned armed on strategy 1", 1, autostate["rkn_tcp"]["pinned-auto.example"].z2k_auto_pinned)
+  check("T129: state.tsv stays 6-col auto", "auto", row_mode("rkn_tcp", "pinned-auto.example"))
+
+  -- Одиночный всплеск сбоя (_sim 1->2) поглощается защитой auto_pinned:
+  circular(nil, mk("rkn_tcp", "pinned-auto.example", { sim = 2 }))
+  check("T129: first failure burst blocked (stays strategy 1)", 1, autostate["rkn_tcp"]["pinned-auto.example"].nstrategy)
+  check("T129: disk stays strategy 1", 1, row("rkn_tcp", "pinned-auto.example"))
+
+  -- Новый подтверждённый успех сбрасывает счётчик раундов провала:
+  circular(nil, mk("rkn_tcp", "pinned-auto.example", { crec = { nocheck = true } }))
+  check("T129: intervening healthy success resets fail rounds", 0, autostate["rkn_tcp"]["pinned-auto.example"].z2k_ap_fail_rounds)
+  circular(nil, mk("rkn_tcp", "pinned-auto.example", { sim = 2 }))
+  check("T129: burst after recovery still blocked once", 1, autostate["rkn_tcp"]["pinned-auto.example"].nstrategy)
+
+  -- Две подряд серии провалов без промежуточного успеха снимают auto_pinned и ротируют:
+  circular(nil, mk("rkn_tcp", "pinned-auto.example", { sim = 2 }))
+  check("T129: second consecutive failure round unlocks and rotates", 2, autostate["rkn_tcp"]["pinned-auto.example"].nstrategy)
+  check("T129: auto_pinned cleared after rotation", nil, autostate["rkn_tcp"]["pinned-auto.example"].z2k_auto_pinned)
+  check("T129: rotated strategy 2 persisted", 2, row("rkn_tcp", "pinned-auto.example"))
+end
+
+-- T130: neutral / server_active_reject не ставят auto_pinned, nohost исключён,
+-- а ручной pin (mode="frozen") и ручной сброс через панель не конфликтуют.
+do
+  fresh()
+  now = 13100
+  for i = 1, 4 do
+    circular(nil, mk("rkn_tcp", "neutral-only.example", { crec = { nocheck = true, neutral = true } }))
+  end
+  check("T130: neutral connections never arm auto_pinned", nil, autostate["rkn_tcp"]["neutral-only.example"].z2k_auto_pinned)
+
+  for i = 1, 4 do
+    circular(nil, mk("discord_udp", nil, { hostkey = "z2k_nohost_key", crec = { nocheck = true } }))
+  end
+  check("T130: hostless nohost pool exempt from auto_pinned", nil, autostate["discord_udp"]["nohost"].z2k_auto_pinned)
+
+  -- Ручная смена стратегии в панели сбрасывает auto_pinned
+  for i = 1, 3 do
+    circular(nil, mk("rkn_tcp", "reset-ap.example", { crec = { nocheck = true } }))
+  end
+  check("T130: auto_pinned armed before external edit", 1, autostate["rkn_tcp"]["reset-ap.example"].z2k_auto_pinned)
+  write_file("# h\n# h2\nrkn_tcp\treset-ap.example\t2\t13200\tauto\n")
+  now = 13105
+  circular(nil, mk("rkn_tcp", "reset-ap.example"))
+  check("T130: external strategy edit clears auto_pinned", nil, autostate["rkn_tcp"]["reset-ap.example"].z2k_auto_pinned)
+end
+
 print(string.format("\nPASSED: %d\nFAILED: %d", PASS, FAIL))
 os.exit(FAIL == 0 and 0 or 1)

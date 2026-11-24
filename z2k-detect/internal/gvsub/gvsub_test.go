@@ -128,6 +128,37 @@ func TestParseCluster(t *testing.T) {
 	}
 }
 
+func TestClassifyTargetAndSharedGFE(t *testing.T) {
+	cases := []struct {
+		name      string
+		kind      HostKind
+		sharedGFE bool
+		target    bool
+	}{
+		{"rr1---sn-example-b.googlevideo.com", HostCluster, false, true},
+		{"RR4---SN-EXAMPLE-A.GVT1.COM.", HostCluster, false, true},
+		{"rr1---sn-example-a.c.youtube.com", HostYouTubeCache, false, true},
+		{"redirector.googlevideo.com", HostSharedGFE, true, true},
+		{"MANIFEST.GOOGLEVIDEO.COM.", HostSharedGFE, true, true},
+		{"googlevideo.com", HostSharedGFE, true, true},
+		{"other.googlevideo.com", HostSharedGFE, true, true},
+		{"c.youtube.com", HostOther, false, false},
+		{"not-cache.gvt1.com", HostOther, false, false},
+		{"youtube.com", HostOther, false, false},
+	}
+	for _, tc := range cases {
+		if got := ClassifyTarget(tc.name); got != tc.kind {
+			t.Errorf("ClassifyTarget(%q) = %v, want %v", tc.name, got, tc.kind)
+		}
+		if got := IsSharedGFE(tc.name); got != tc.sharedGFE {
+			t.Errorf("IsSharedGFE(%q) = %v, want %v", tc.name, got, tc.sharedGFE)
+		}
+		if got := IsTarget(tc.name); got != tc.target {
+			t.Errorf("IsTarget(%q) = %v, want %v", tc.name, got, tc.target)
+		}
+	}
+}
+
 type fakeNet struct {
 	mu      sync.Mutex
 	state   map[string]Verdict

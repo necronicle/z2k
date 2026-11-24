@@ -107,6 +107,10 @@ local function prefix_add(state, seq, payload, limit)
         if seq + #payload - 1 > #data then state.data = data .. payload:sub(#data - seq + 2) end
     else
         state.parts = state.parts or {}
+        for i = 1, #state.parts do
+            local existing = state.parts[i]
+            if existing[1] == seq and existing[2] == payload then return true end
+        end
         state.bytes = (state.bytes or 0) + #payload
         if #state.parts >= 16 or state.bytes > limit * 2 then state.bad = true; return false end
         state.parts[#state.parts + 1] = { seq, payload }
@@ -292,35 +296,75 @@ local function http_response(desync, crec, state)
     return false, "pending"
 end
 
+local TLS_APPDATA_SUCCESS_BYTES = 1024
+
 local function tls_response(crec, state)
-    local data, offset = state.data or "", 1
-    if #data - offset + 1 >= 5 then
-        local record = data:sub(offset)
-        local len = record_length(record)
-        if not len or len == 0 or len > 18432 then return false, "neutral" end
-        local kind = record:byte(1)
-        if kind == 22 then
-            if #record < 9 then return false, "pending" end
-            local handshake_len = record:byte(7) * 65536 + record:byte(8) * 256 + record:byte(9)
-            if record:byte(6) == 2 and len >= 4 and handshake_len >= 38 then
-                crec.server_hello = true
-                crec.response_prefix = nil
-                return false -- only normal byte-progress success from here on
+    local data = state.data or ""
+    local offset = state.offset or 1
+    while #data - offset + 1 >= 5 do
+        local len = record_length(data:sub(offset, offset + 4))
+        if not len or len == 0 or len > 18432 then
+            if crec.server_hello then
+                crec.tls_stop = true
+                return false
             end
             return false, "neutral"
+        end
+        local kind = data:byte(offset)
+        local avail_in_rec = #data - offset + 1 - 5
+        if kind == 22 then
+            if not crec.server_hello then
+                if #data - offset + 1 < 9 then return false, "pending" end
+                local handshake_len = data:byte(offset + 6) * 65536
+                    + data:byte(offset + 7) * 256 + data:byte(offset + 8)
+                if data:byte(offset + 5) == 2 and len >= 4 and handshake_len >= 38 then
+                    crec.server_hello = true
+                else
+                    return false, "neutral"
+                end
+            end
+            if avail_in_rec < len then return false, "pending" end
+            offset = offset + 5 + len
+            state.offset = offset
         elseif kind == 21 then
+            if crec.server_hello then
+                -- Плейнтекст-алерт после ServerHello вне раннего окна провала,
+                -- но не даём соединению засчитать успех по короткому TLS.
+                crec.tls_stop = true
+                return false, "neutral"
+            end
             if len ~= 2 then return false, "neutral" end
-            if #record < 7 then return false, "pending" end
-            if record:byte(6) == 2 and record:byte(7) ~= 0 then
-                DLOG("z2k_fail_tls_alert: plaintext fatal alert " .. record:byte(7))
+            if avail_in_rec < 2 then return false, "pending" end
+            if data:byte(offset + 5) == 2 and data:byte(offset + 6) ~= 0 then
+                DLOG("z2k_fail_tls_alert: plaintext fatal alert " .. data:byte(offset + 6))
                 return true
             end
             return false, "neutral"
         elseif kind == 20 or kind == 23 then
-            -- Cannot interpret protected records as plaintext alerts, including
-            -- TLS 1.2 abbreviated handshakes. No guessed ciphertext severity.
-            return false, "neutral"
+            if not crec.server_hello then
+                -- Cannot interpret protected records as plaintext alerts, including
+                -- TLS 1.2 abbreviated handshakes. No guessed ciphertext severity.
+                return false, "neutral"
+            end
+            if avail_in_rec < len then
+                if kind == 23 and (crec.tls_app_bytes or 0) + avail_in_rec >= TLS_APPDATA_SUCCESS_BYTES then
+                    return false, "success"
+                end
+                return false, "pending"
+            end
+            if kind == 23 then
+                crec.tls_app_bytes = (crec.tls_app_bytes or 0) + len
+                if crec.tls_app_bytes >= TLS_APPDATA_SUCCESS_BYTES then
+                    return false, "success"
+                end
+            end
+            offset = offset + 5 + len
+            state.offset = offset
         else
+            if crec.server_hello then
+                crec.tls_stop = true
+                return false
+            end
             return false, "neutral"
         end
     end
@@ -329,7 +373,8 @@ end
 
 function z2k_fail_tls_alert(desync, crec)
     if not crec or not desync.dis or not desync.dis.tcp then return false end
-    if desync.arg.key == "gv_tcp" and type(z2k_gvsub_neutral) == "function"
+    if (desync.arg.key == "gv_tcp" or desync.arg.key == "yt_tcp")
+        and type(z2k_gvsub_neutral) == "function"
         and z2k_gvsub_neutral(desync, crec) then return false, "neutral" end
     local p, flags = desync.dis.payload or "", desync.dis.tcp.th_flags
     if desync.outgoing then
@@ -343,19 +388,38 @@ function z2k_fail_tls_alert(desync, crec)
         return false
     end
     discord_tls_observe(desync, crec)
-    -- RST is a transport failure within the native window, regardless of TTL.
-    if bitand(flags, TH_RST) ~= 0 then return native_failure(desync, crec) end
-    if crec.server_hello then return false end
-    if #p == 0 then
-        if bitand(flags, TH_FIN) ~= 0 and crec.response_prefix then return false, "neutral" end
-        return false
+    -- После подтверждённого ServerHello закрытие потока по RST не должно
+    -- провоцировать ротацию: клиент или приложение могли прервать соединение
+    -- уже после успешного прохождения DPI (например, preconnect / /generate_204).
+    if crec.server_hello then
+        if bitand(flags, TH_RST) ~= 0 then
+            crec.response_prefix = nil
+            return false, "neutral"
+        end
+        if #p == 0 then return false end
+        if crec.tls_stop or pos_get(desync, 's') > RESPONSE_LIMIT then
+            crec.response_prefix = nil
+            return false
+        end
+    else
+        -- RST is a transport failure within the native window, regardless of TTL.
+        if bitand(flags, TH_RST) ~= 0 then return native_failure(desync, crec) end
+        if #p == 0 then
+            if bitand(flags, TH_FIN) ~= 0 and crec.response_prefix then return false, "neutral" end
+            return false
+        end
     end
-    local http = crec.request_kind == "http_req" or desync.arg.key == "http_rkn" or desync.l7payload == "http_reply"
+    local http = (not crec.server_hello)
+        and (crec.request_kind == "http_req" or desync.arg.key == "http_rkn" or desync.l7payload == "http_reply")
     crec.http_started = http or nil
     crec.response_prefix = crec.response_prefix or {}
     local state = crec.response_prefix
     if not prefix_add(state, pos_get(desync, 's'), p, RESPONSE_LIMIT) then
         crec.response_prefix = nil
+        if crec.server_hello then
+            crec.tls_stop = true
+            return false
+        end
         return false, "neutral"
     end
     local failed, outcome

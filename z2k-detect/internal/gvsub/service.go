@@ -59,15 +59,26 @@ func (s *Service) init() {
 	}
 }
 
-// The c.youtube.com cache uses yt_tcp. A shared IP may still qualify through
-// an independent googlevideo.com answer, so keep already published addresses.
-func youtubeCacheName(name string) bool {
-	return strings.HasSuffix(strings.TrimSuffix(strings.ToLower(name), "."), ".c.youtube.com")
+func targetRank(kind HostKind) int {
+	switch kind {
+	case HostCluster:
+		return 3
+	case HostYouTubeCache:
+		return 2
+	case HostSharedGFE:
+		return 1
+	default:
+		return 0
+	}
 }
 
+// Имена c.youtube.com и общих фронтендов SharedGFE не должны попадать в
+// /tmp/z2k-gv-ips.txt, но если этот же IP одновременно отдал реальный кэш-кластер,
+// уже опубликованный адрес сохраняем.
 func (s *Service) OnDNS(name string, addrs []netip.Addr) <-chan struct{} {
 	done := make(chan struct{})
-	if !IsTarget(name) || s.whitelisted(name) {
+	kind := ClassifyTarget(name)
+	if kind == HostOther || s.whitelisted(name) {
 		close(done)
 		return done
 	}
@@ -87,7 +98,7 @@ func (s *Service) OnDNS(name string, addrs []netip.Addr) <-chan struct{} {
 		}
 		if providerCache(name, a) {
 			delete(s.published, a)
-		} else if !youtubeCacheName(name) {
+		} else if kind == HostCluster {
 			s.published[a] = struct{}{}
 		}
 		e := s.known[a]
@@ -95,7 +106,12 @@ func (s *Service) OnDNS(name string, addrs []netip.Addr) <-chan struct{} {
 			e = &entry{}
 			s.known[a] = e
 		}
-		e.seen, e.name = now, name
+		e.seen = now
+		// Сохраняем приоритет имён кэша (HostCluster > HostYouTubeCache > HostSharedGFE),
+		// чтобы общий фронтенд не перетирал кластерный маркер для ipset и providerCache.
+		if e.name == "" || targetRank(kind) >= targetRank(ClassifyTarget(e.name)) {
+			e.name = name
+		}
 		// Provider answers themselves: neither preflight nor readiness probes.
 		if isGoogle(a) && (e.checked.IsZero() || now.Sub(e.checked) >= CacheTTL) {
 			waits = append(waits, s.startLocked(a))
@@ -180,6 +196,8 @@ func (s *Service) writeNeutral() {
 			}
 			if e.verdict == Bad {
 				rows = append(rows, "bad "+hex.EncodeToString(a.AsSlice()))
+			} else if e.verdict == Dead {
+				rows = append(rows, "dead "+hex.EncodeToString(a.AsSlice()))
 			}
 		}
 	}
@@ -252,8 +270,17 @@ func (s *Service) Restore() int {
 		}
 		if s.known[a] == nil {
 			s.known[a] = &entry{seen: k.Seen, name: k.Name}
-			if !youtubeCacheName(k.Name) && !providerCache(k.Name, a) {
-				s.published[a] = struct{}{}
+			switch ClassifyTarget(k.Name) {
+			case HostCluster:
+				if !providerCache(k.Name, a) {
+					s.published[a] = struct{}{}
+				} else {
+					delete(s.published, a)
+				}
+			case HostSharedGFE:
+				// Очищаем старое загрязнение /tmp/z2k-gv-ips.txt от redirector/manifest
+				// после обновления сервиса, если status.json относит IP только к SharedGFE.
+				delete(s.published, a)
 			}
 			n++
 		}

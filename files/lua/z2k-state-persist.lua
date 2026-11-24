@@ -29,6 +29,26 @@ local last_written = {}     -- last_written[askey][hostn] = { strategy = N, ts =
 local last_write = 0
 local write_interval = 2    -- seconds (debounce window for flash-friendly writes)
 
+-- Анти-дрейф (auto_pinned в RAM): защита проверенной стратегии от одиночного
+-- клиентского шума без изменения формата state.tsv и ручного mode="frozen".
+local AUTO_PIN_SUCCESS_STREAK = 3
+local AUTO_PIN_FAIL_ROUNDS = 2
+local AUTO_PIN_FAIL_WINDOW = 300
+
+local function clear_auto_pin(hrec)
+  if not hrec then return end
+  hrec.z2k_auto_pinned = nil
+  hrec.z2k_ap_succ = nil
+  hrec.z2k_ap_fail_rounds = nil
+  hrec.z2k_ap_fail_ts = nil
+end
+
+local function is_hostless_bucket(desync, hostn)
+  if hostn == "nohost" then return true end
+  local hk = desync and desync.arg and desync.arg.hostkey
+  return hk == "z2k_nohost_key"
+end
+
 -- ---------------------------------------------------------------------------
 -- helpers
 -- ---------------------------------------------------------------------------
@@ -111,7 +131,7 @@ local function merge_state_file_into(path, dest)
       -- 5th column = mode (auto|frozen). Optional for backward compat: a legacy
       -- 4-column row parses mode="" → normalized to "auto" below.
       local askey, host, strat, ts, mode, sni =
-        line:match("^([^\t]+)\t([^\t]+)\t([0-9]+)\t?([0-9]*)\t?([a-z]*)\t?([A-Za-z0-9.-]*)")
+        line:match("^([^\t]+)\t([^\t]+)\t([0-9]+)\t?([0-9]*)\t?([a-z_]*)\t?([A-Za-z0-9.-]*)")
       if askey and host and strat then
         local n = tonumber(strat)
         if n and n >= 1 then
@@ -491,6 +511,8 @@ local function set_live_nstrategy(askey, hostn, n, sni, update_sni)
       arec.nstrategy = n
       -- A manual reset to the same number is still a new attempt generation.
       arec.generation = nil
+      clear_auto_pin(arec)
+      arec.z2k_ap_last_strat = n
       if update_sni then
         arec.z2k_sni = sni
         arec.z2k_sni_ok = (sni ~= nil) or nil
@@ -585,17 +607,81 @@ local function apply_pin(askey, hostn, hrec)
 end
 
 -- ---------------------------------------------------------------------------
--- wrap circular() — persistence + explicit operator reconciliation.
--- No automatic success-based override of circular's result.
+-- wrap circular_rotate() + circular() — persistence, operator reconcile,
+-- and auto_pinned Anti-Drift protection.
 -- ---------------------------------------------------------------------------
+local has_native_rotate = (type(circular_rotate) == "function")
+if has_native_rotate then
+  local orig_circular_rotate = circular_rotate
+  circular_rotate = function(hrec)   -- luacheck: ignore
+    if hrec and hrec.nstrategy and hrec.final ~= hrec.nstrategy
+       and (not hrec.z2k_ap_hostless)
+       and hrec.z2k_auto_pinned == hrec.nstrategy then
+      local now = now_t()
+      if hrec.z2k_ap_fail_ts and (now < hrec.z2k_ap_fail_ts or (now - hrec.z2k_ap_fail_ts) > AUTO_PIN_FAIL_WINDOW) then
+        hrec.z2k_ap_fail_rounds = 0
+      end
+      hrec.z2k_ap_fail_rounds = (hrec.z2k_ap_fail_rounds or 0) + 1
+      hrec.z2k_ap_fail_ts = now
+      if hrec.z2k_ap_fail_rounds < AUTO_PIN_FAIL_ROUNDS then
+        -- Подавляем одиночный всплеск сбоев и открываем новое generation, чтобы
+        -- оставшиеся потоки того же всплеска не добили второй кворум сразу.
+        hrec.generation = nil
+        if type(circular_sync_generation) == "function" then
+          circular_sync_generation(hrec)
+        end
+        if type(DLOG) == "function" then
+          DLOG("auto_pinned: hold strategy " .. tostring(hrec.nstrategy)
+               .. " (fail round " .. tostring(hrec.z2k_ap_fail_rounds) .. "/" .. tostring(AUTO_PIN_FAIL_ROUNDS) .. ")")
+        end
+        return false
+      end
+      -- Устойчивая серия реальных провалов подтверждена: снимаем auto_pinned.
+      clear_auto_pin(hrec)
+    end
+    local rotated = orig_circular_rotate(hrec)
+    if rotated and hrec then
+      clear_auto_pin(hrec)
+      hrec.z2k_ap_last_strat = tonumber(hrec.nstrategy)
+    end
+    return rotated
+  end
+end
+
+if type(circular_report_failure) == "function" then
+  local orig_circular_report_failure = circular_report_failure
+  circular_report_failure = function(hrec, crec, arg)   -- luacheck: ignore
+    local rotated = orig_circular_report_failure(hrec, crec, arg)
+    -- Таймерные провалы (QUIC / Discord TLS) не проходят через wrapper circular(),
+    -- поэтому сбрасываем незакреплённую серию успехов и здесь.
+    if not rotated and hrec and crec and hrec.nstrategy and hrec.final ~= hrec.nstrategy
+       and (not hrec.z2k_ap_hostless)
+       and crec.failure and not crec.neutral and not crec.z2k_server_active_reject
+       and not crec.z2k_ap_fail_counted then
+      local same_strat = (crec.nstrategy == nil or tonumber(crec.nstrategy) == tonumber(hrec.nstrategy))
+        and (crec.z2k_nstrat == nil or tonumber(crec.z2k_nstrat) == tonumber(hrec.nstrategy))
+        and (not hrec.generation or not crec.generation or crec.generation == hrec.generation)
+      if same_strat then
+        crec.z2k_ap_fail_counted = true
+        if hrec.z2k_auto_pinned ~= hrec.nstrategy then
+          hrec.z2k_ap_succ = 0
+        end
+      end
+    end
+    return rotated
+  end
+end
+
 if type(circular) == "function" then
   local orig_circular = circular
   circular = function(ctx, desync)
     local askey_before, hostn_before, hrec_before
     local nstrategy_before_circular   -- used for initial seed recovery
+    local hostless_before = is_hostless_bucket(desync, nil)
     -- pre-block errors stay swallowed: never break the nfqws desync path.
     pcall(function()
       askey_before, hostn_before, hrec_before = get_record_for_desync(desync, true)
+      if is_hostless_bucket(desync, hostn_before) then hostless_before = true end
     end)
 
     -- Apply external state.tsv edits (webpanel × / manual) to the live autostate
@@ -693,14 +779,77 @@ if type(circular) == "function" then
         local nocheck_after, failure_after, neutral_after, server_active_after =
           conn_record_flags(desync)
         local n_after = tonumber(hrec.nstrategy) or nil
+        if hostless_before or is_hostless_bucket(desync, hostn) then
+          hrec.z2k_ap_hostless = true
+        end
 
         -- Config changed (fewer strategies than persisted): normalize to 1 and
         -- drop the now-invalid persisted entry.
         local ct = tonumber(hrec.ctstrategy) or nil
         if ct and ct > 0 and n_after and (n_after < 1 or n_after > ct) then
           hrec.nstrategy = 1
+          clear_auto_pin(hrec)
+          hrec.z2k_ap_last_strat = 1
           clear_persisted(askey, hostn)
           return
+        end
+
+        -- Запасной перехватчик для мок-движка (без circular_rotate): блокируем
+        -- одиночный провальный кворум на auto_pinned, разблокируем после устойчивой
+        -- серии провалов без промежуточного успеха.
+        if (not has_native_rotate) and nstrategy_before_circular and n_after
+           and n_after ~= nstrategy_before_circular
+           and hrec.final ~= nstrategy_before_circular
+           and (not hrec.z2k_ap_hostless)
+           and hrec.z2k_auto_pinned == nstrategy_before_circular then
+          local crec_mock = desync and desync.track and desync.track.lua_state and desync.track.lua_state.automate
+          if not (crec_mock and crec_mock.z2k_ap_force_rotate) then
+            local now = now_t()
+            if hrec.z2k_ap_fail_ts and (now < hrec.z2k_ap_fail_ts or (now - hrec.z2k_ap_fail_ts) > AUTO_PIN_FAIL_WINDOW) then
+              hrec.z2k_ap_fail_rounds = 0
+            end
+            hrec.z2k_ap_fail_rounds = (hrec.z2k_ap_fail_rounds or 0) + 1
+            hrec.z2k_ap_fail_ts = now
+            if hrec.z2k_ap_fail_rounds < AUTO_PIN_FAIL_ROUNDS then
+              hrec.nstrategy = nstrategy_before_circular
+              n_after = nstrategy_before_circular
+            else
+              clear_auto_pin(hrec)
+            end
+          else
+            clear_auto_pin(hrec)
+          end
+        end
+
+        if n_after and hrec.z2k_ap_last_strat ~= nil and n_after ~= hrec.z2k_ap_last_strat then
+          clear_auto_pin(hrec)
+        end
+        if n_after then
+          hrec.z2k_ap_last_strat = n_after
+        end
+
+        -- Учёт подтверждённых здоровых (non-neutral) соединений для auto_pinned.
+        local crec = desync and desync.track and desync.track.lua_state and desync.track.lua_state.automate
+        if crec and n_after and (not hrec.z2k_ap_hostless) and hrec.final ~= n_after then
+          local same_strat = (crec.nstrategy == nil or tonumber(crec.nstrategy) == n_after)
+            and (crec.z2k_nstrat == nil or tonumber(crec.z2k_nstrat) == n_after)
+            and (not hrec.generation or not crec.generation or crec.generation == hrec.generation)
+          if same_strat and not neutral_after and not server_active_after then
+            if failure_after and not crec.z2k_ap_fail_counted then
+              crec.z2k_ap_fail_counted = true
+              if hrec.z2k_auto_pinned ~= n_after then
+                hrec.z2k_ap_succ = 0
+              end
+            elseif nocheck_after and not failure_after and not crec.z2k_ap_counted then
+              crec.z2k_ap_counted = true
+              hrec.z2k_ap_fail_rounds = 0
+              hrec.z2k_ap_fail_ts = nil
+              hrec.z2k_ap_succ = (hrec.z2k_ap_succ or 0) + 1
+              if hrec.z2k_ap_succ >= AUTO_PIN_SUCCESS_STREAK then
+                hrec.z2k_auto_pinned = n_after
+              end
+            end
+          end
         end
 
         -- Known-good gating (legacy state core). A server-active rejection
