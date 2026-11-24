@@ -626,11 +626,14 @@ fi
 
 log_info "Удаление iptables правил per-flow PPE de-offload..."
 ppe_rules_removed=0
-# Текущее правило, прежнее (без порта 5222) и правило QUIC. Пока тут стоял только
-# прежний вариант, текущее не снималось и поток оставался мимо ускорителя.
-for ppe_args in "-p tcp -m multiport --dports 80,443,2053,2083,2087,2096,5222,8443 -m connskip --connskip 30 -j PPE" \
+# Текущее правило (connskip 60), прежнее (connskip 30 / без порта 5222) и правило QUIC.
+# Пока тут стоял только прежний вариант, текущее не снималось и поток оставался мимо ускорителя.
+for ppe_args in "-p tcp -m multiport --dports 80,443,2053,2083,2087,2096,5222,8443 -m connskip --connskip 60 -j PPE" \
+                "-p udp --dport 443 -m connskip --connskip 60 -j PPE" \
+                "-p tcp -m multiport --dports 80,443,2053,2083,2087,2096,5222,8443 -m connskip --connskip 30 -j PPE" \
                 "-p tcp -m multiport --dports 80,443,2053,2083,2087,2096,8443 -m connskip --connskip 30 -j PPE" \
                 "-p udp --dport 443 -m connskip --connskip 30 -j PPE" \
+                "-p udp -m multiport --dports 1024:2407,2409:65535 -m connskip --connskip 60 -j PPE" \
                 "-p udp -m multiport --dports 1024:2407,2409:65535 -m connskip --connskip 30 -j PPE"; do
     for ppe_c in FORWARD PREROUTING; do
         while iptables -w -t mangle -C "$ppe_c" $ppe_args 2>/dev/null; do

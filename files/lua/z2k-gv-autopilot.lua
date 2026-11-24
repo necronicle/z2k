@@ -96,6 +96,11 @@ local function seq_ge_safe(a, b)
     return diff < 2147483648
 end
 
+local function seq_gt_safe(a, b)
+    if a == b then return false end
+    return seq_ge_safe(a, b)
+end
+
 local function clock_now()
     if type(clock_getfloattime) == "function" then
         return clock_getfloattime()
@@ -998,18 +1003,24 @@ function z2k_autopilot_stall_timer(name, st)
     end
 end
 
--- Лимиты видимости окна connbytes: при fake:repeats=7-11 сервер шлёт 7-11 пустых
--- dup-ACK до ServerHello (входящий pcounter быстро >=14), хотя пакетов С ДАННЫМИ
--- всего ~4-5 (pdcounter). Ядро (xt_connbytes) также считает пакеты rawsend стратегий,
--- поэтому сопоставляем оценочный kernel out = out_pkts + max(0, in_total - in_data - 1)
--- с окном NFQWS2_TCP_PKT_OUT (--connbytes 0:30, по умолчанию out_limit=30).
+-- Лимиты видимости окон connbytes и PPE connskip:
+-- При fake:repeats=7-11 сервер шлёт 7-11 пустых dup-ACK до ServerHello (входящий
+-- pcounter быстро >=14), хотя пакетов С ДАННЫМИ всего ~4-5 (pdcounter).
+-- Ядро (xt_connbytes) также считает пакеты rawsend стратегий, поэтому сравниваем:
+--   1) est_out = out_pkts + max(0, in_total - in_data - 1) с NFQWS2_TCP_PKT_OUT (45),
+--   2) est_bidir = est_out + in_total с PPE_CONNSKIP (60, z2k-ppe-deoffload.sh),
+--      который считает ОБА направления (original + reply) и после порога уводит
+--      поток в аппаратный PPE Keenetic, делая дальнейшие ответы невидимыми для CPU.
 -- В nfqws2 pos.direct — направление текущего пакета.
 local STALL_GUARD_MAX_IN_DATA_PKTS = 10
-local STALL_GUARD_MAX_OUT_PKTS = 16
+local STALL_GUARD_MAX_OUT_PKTS = 24
 local STALL_GUARD_MAX_SRV_BYTES = 16384
-local STALL_GUARD_DEFAULT_OUT_WINDOW = 30
+local STALL_GUARD_DEFAULT_OUT_WINDOW = 45
 local STALL_GUARD_OUT_MARGIN_ARM = 4
 local STALL_GUARD_OUT_MARGIN_CANCEL = 1
+local STALL_GUARD_DEFAULT_BIDIR_WINDOW = 60
+local STALL_GUARD_BIDIR_MARGIN_ARM = 6
+local STALL_GUARD_BIDIR_MARGIN_CANCEL = 2
 
 local function stall_out_window(arg)
     local v = type(arg) == "table" and tonumber(arg.out_limit) or nil
@@ -1018,6 +1029,15 @@ local function stall_out_window(arg)
         v = env and tonumber(env) or nil
     end
     return clamp_num(math.floor(v or STALL_GUARD_DEFAULT_OUT_WINDOW), 10, 100)
+end
+
+local function stall_bidir_window(arg)
+    local v = type(arg) == "table" and tonumber(arg.connskip_limit) or nil
+    if not v then
+        local env = os and os.getenv and os.getenv("Z2K_PPE_CONNSKIP_OVERRIDE")
+        v = env and tonumber(env) or nil
+    end
+    return clamp_num(math.floor(v or STALL_GUARD_DEFAULT_BIDIR_WINDOW), 20, 200)
 end
 
 local function flow_counters(desync, st)
@@ -1179,11 +1199,15 @@ function z2k_autopilot_stall_guard(ctx, desync)
     local rst = band(tcp.th_flags, TCP_FLAG_RST) ~= 0
     local ack = band(tcp.th_flags, TCP_FLAG_ACK) ~= 0
 
+    local cli_seq_advanced = false
     if desync.outgoing then
         if not desync.replay then
             st.out_pkts = (st.out_pkts or 0) + 1
         end
         local c_next = add_u32(tcp.th_seq, plen + (syn and 1 or 0) + (fin and 1 or 0))
+        if plen > 0 and (not st.cli_next_seq or seq_gt_safe(c_next, st.cli_next_seq)) then
+            cli_seq_advanced = true
+        end
         if not st.cli_next_seq or seq_ge_safe(c_next, st.cli_next_seq) then
             st.cli_next_seq = c_next
         end
@@ -1204,7 +1228,7 @@ function z2k_autopilot_stall_guard(ctx, desync)
         if not st.srv_next_seq or seq_ge_safe(s_next, st.srv_next_seq) then
             st.srv_next_seq = s_next
         end
-        if ack and not st.cli_next_seq then
+        if ack and (not st.cli_next_seq or seq_ge_safe(tcp.th_ack, st.cli_next_seq)) then
             st.cli_next_seq = tcp.th_ack
         end
     end
@@ -1238,13 +1262,18 @@ function z2k_autopilot_stall_guard(ctx, desync)
         local in_emp = math.max(0, in_t - in_d - 1)
         local est_out = out_p + in_emp
         local out_win = stall_out_window(desync.arg)
-        if out_p >= STALL_GUARD_MAX_OUT_PKTS + 2 or est_out >= out_win - STALL_GUARD_OUT_MARGIN_CANCEL then
+        local est_bidir = est_out + in_t
+        local bidir_win = stall_bidir_window(desync.arg)
+        if out_p >= STALL_GUARD_MAX_OUT_PKTS + 2
+            or est_out >= out_win - STALL_GUARD_OUT_MARGIN_CANCEL
+            or est_bidir >= bidir_win - STALL_GUARD_BIDIR_MARGIN_CANCEL then
             cancel_stall_timer(st)
             st.armed = false
             crec.z2k_sg_done = true
             dlog(string.format(
-                "z2k_autopilot_stall_guard: cancelled at connbytes boundary (out=%d est_out=%d/%d) srv=%s:%d cli=%s:%d",
+                "z2k_autopilot_stall_guard: cancelled at connbytes boundary (out=%d est_out=%d/%d est_bidir=%d/%d) srv=%s:%d cli=%s:%d",
                 tonumber(out_p) or 0, tonumber(est_out) or 0, tonumber(out_win) or 0,
+                tonumber(est_bidir) or 0, tonumber(bidir_win) or 0,
                 tostring(bin_to_ip_text(st.srv_ip)), tonumber(st.srv_port) or 0,
                 tostring(bin_to_ip_text(st.cli_ip)), tonumber(st.cli_port) or 0
             ))
@@ -1324,7 +1353,7 @@ function z2k_autopilot_stall_guard(ctx, desync)
         return
     end
 
-    if st.saw_server_hello and not st.armed and plen > 0 then
+    if st.saw_server_hello and not st.armed and plen > 0 and cli_seq_advanced then
         if tls_kind == "control" or tls_kind == "alert" then
             return
         end
@@ -1336,20 +1365,25 @@ function z2k_autopilot_stall_guard(ctx, desync)
         local in_empty = math.max(0, in_total - in_data - 1)
         local est_out = out_pkts + in_empty
         local out_win = stall_out_window(desync.arg)
+        local est_bidir = est_out + in_total
+        local bidir_win = stall_bidir_window(desync.arg)
         local srv_bytes = (ack and st.srv_base_seq and seq_ge_safe(tcp.th_ack, st.srv_base_seq))
             and ((tcp.th_ack - st.srv_base_seq) % 4294967296) or 0
         if in_data >= STALL_GUARD_MAX_IN_DATA_PKTS
             or out_pkts >= STALL_GUARD_MAX_OUT_PKTS
             or est_out > out_win - STALL_GUARD_OUT_MARGIN_ARM
+            or est_bidir > bidir_win - STALL_GUARD_BIDIR_MARGIN_ARM
             or srv_bytes > STALL_GUARD_MAX_SRV_BYTES then
             crec.z2k_sg_done = true
             dlog(string.format(
-                "z2k_autopilot_stall_guard: skip arming near connbytes cap (in_data=%d in_total=%d out=%d est_out=%d/%d srv_bytes=%d) srv=%s:%d cli=%s:%d",
+                "z2k_autopilot_stall_guard: skip arming near connbytes cap (in_data=%d in_total=%d out=%d est_out=%d/%d est_bidir=%d/%d srv_bytes=%d) srv=%s:%d cli=%s:%d",
                 tonumber(in_data) or 0,
                 tonumber(in_total) or 0,
                 tonumber(out_pkts) or 0,
                 tonumber(est_out) or 0,
                 tonumber(out_win) or 0,
+                tonumber(est_bidir) or 0,
+                tonumber(bidir_win) or 0,
                 tonumber(srv_bytes) or 0,
                 tostring(bin_to_ip_text(st.srv_ip)), tonumber(st.srv_port) or 0,
                 tostring(bin_to_ip_text(st.cli_ip)), tonumber(st.cli_port) or 0

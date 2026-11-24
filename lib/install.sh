@@ -5891,9 +5891,12 @@ uninstall_zapret2() {
     if [ -r /opt/zapret2/z2k-ppe-deoffload.sh ]; then
         ( . /opt/zapret2/z2k-ppe-deoffload.sh 2>/dev/null && z2k_ppe_remove_rules ) 2>/dev/null || true
     fi
-    for _ppe_args in "-p tcp -m multiport --dports 80,443,2053,2083,2087,2096,5222,8443 -m connskip --connskip 30 -j PPE" \
+    for _ppe_args in "-p tcp -m multiport --dports 80,443,2053,2083,2087,2096,5222,8443 -m connskip --connskip 60 -j PPE" \
+                     "-p udp --dport 443 -m connskip --connskip 60 -j PPE" \
+                     "-p tcp -m multiport --dports 80,443,2053,2083,2087,2096,5222,8443 -m connskip --connskip 30 -j PPE" \
                      "-p tcp -m multiport --dports 80,443,2053,2083,2087,2096,8443 -m connskip --connskip 30 -j PPE" \
                      "-p udp --dport 443 -m connskip --connskip 30 -j PPE" \
+                     "-p udp -m multiport --dports 1024:2407,2409:65535 -m connskip --connskip 60 -j PPE" \
                      "-p udp -m multiport --dports 1024:2407,2409:65535 -m connskip --connskip 30 -j PPE"; do
         for _c in FORWARD PREROUTING; do
             while iptables -w -t mangle -C "$_c" $_ppe_args 2>/dev/null; do

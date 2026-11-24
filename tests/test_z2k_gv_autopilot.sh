@@ -68,7 +68,7 @@ R1=$(make_root fresh)
 CFG1=$(run_gen "$R1")
 OPT1=$(extract_opt "$R1/config")
 if has 'Z2K_YT_AUTOPILOT=auto' "$CFG1"; then ok "fresh config emits Z2K_YT_AUTOPILOT=auto"; else bad "missing Z2K_YT_AUTOPILOT=auto"; fi
-if has 'NFQWS2_TCP_PKT_OUT="30"' "$CFG1"; then ok "config emits NFQWS2_TCP_PKT_OUT=30"; else bad "missing NFQWS2_TCP_PKT_OUT=30"; fi
+if has 'NFQWS2_TCP_PKT_OUT="45"' "$CFG1"; then ok "config emits NFQWS2_TCP_PKT_OUT=45"; else bad "missing NFQWS2_TCP_PKT_OUT=45"; fi
 if has '--lua-desync=z2k_autopilot_tcp_fastfail --in-range=a --out-range=a --payload=all --lua-desync=z2k_preflight:' "$OPT1"; then
     ok "gv_tcp order: fastfail -> preflight"
 else
