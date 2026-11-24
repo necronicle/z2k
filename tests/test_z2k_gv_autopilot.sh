@@ -229,6 +229,34 @@ if grep -q 'z2k-gv-policy.dat' "$ROOT/z2k_cleanup.sh" && grep -q 'z2k-gv-observe
 else
     bad "z2k_cleanup.sh missing policy/observed cleanup"
 fi
+if grep -q 'z2k-gv-policy.dat' "$ROOT/lib/install.sh" && grep -q 'z2k-gv-observed.tsv' "$ROOT/lib/install.sh"; then
+    ok "lib/install.sh _z2k_sweep_our_rules cleans policy.dat and observed.tsv"
+else
+    bad "lib/install.sh missing policy/observed cleanup"
+fi
+if awk '/^start_daemons\(\)/,/^}/' "$ROOT/files/S99zapret2.new" | awk '/z2k_gvsub_ensure_observed_owner/{o=NR} /standard_mode_daemons/{s=NR} END{exit (o && s && o < s) ? 0 : 1}'; then
+    ok "S99 start_daemons fixes observed.tsv owner before standard_mode_daemons"
+else
+    bad "S99 start_daemons does not fix observed.tsv owner before daemon start"
+fi
+if ROOT_PATH="$ROOT" sh -c '
+    eval "$(awk "/^z2k_gvsub_ensure_observed_owner\(\)/,/^}/" "$ROOT_PATH/files/S99zapret2.new")"
+    d=$(mktemp -d); trap "rm -rf \"\$d\"" EXIT
+    printf "x\n" > "$d/obs"
+    chown() { echo "CHOWN:$1:$2" >> "$d/log"; }
+    chmod() { echo "CHMOD:$1:$2" >> "$d/log"; }
+    Z2K_GVSUB_OBSERVED="$d/obs" WS_USER=nobody z2k_gvsub_ensure_observed_owner
+    grep -q "CHOWN:nobody:$d/obs" "$d/log" && grep -q "CHMOD:644:$d/obs" "$d/log" || exit 1
+    printf "y\n" > "$d/real"
+    if ln -s "$d/real" "$d/sym" 2>/dev/null && [ -L "$d/sym" ]; then
+        Z2K_GVSUB_OBSERVED="$d/sym" WS_USER=nobody z2k_gvsub_ensure_observed_owner
+        ! grep -q "$d/sym" "$d/log" || exit 1
+    fi
+'; then
+    ok "z2k_gvsub_ensure_observed_owner updates regular file and skips symlink"
+else
+    bad "z2k_gvsub_ensure_observed_owner symlink/chown behavior broken"
+fi
 if grep -q 'files/lua/z2k-gv-autopilot.lua' "$ROOT/z2k.sh"; then
     ok "z2k.sh downloads files/lua/z2k-gv-autopilot.lua"
 else

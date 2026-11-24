@@ -2319,8 +2319,10 @@ start_daemons()
     fi
 
     z2k_preflight_v6_gate
-    # До любого запуска движка: RegisterIpset требует существующий файл.
+    # До любого запуска движка: RegisterIpset требует существующий файл, а nfqws2
+    # (под --user=nobody) должен иметь право дописывать DoH/DoT-наблюдения сразу.
     z2k_gvsub_ensure_ipfile
+    if command -v z2k_gvsub_ensure_observed_owner >/dev/null 2>&1; then z2k_gvsub_ensure_observed_owner; fi
 
     # Использовать функции из common/linux_daemons.sh
     # standard_mode_daemons вызывает do_nfqws
@@ -3263,6 +3265,18 @@ z2k_gvsub_fw_stop()
     return 0
 }
 
+z2k_gvsub_ensure_observed_owner()
+{
+    local obs="${Z2K_GVSUB_OBSERVED:-/tmp/z2k-gv-observed.tsv}"
+    local user="${WS_USER:-nobody}"
+    # Не трогаем симлинки; если файл DoH/DoT-наблюдений уже создан (например от root),
+    # отдаём владельца демону nfqws2 до его запуска и гарантируем 0644 для чтения gvsub/diag.
+    if [ -f "$obs" ] && [ ! -L "$obs" ]; then
+        chown "$user" "$obs" 2>/dev/null || :
+        chmod 644 "$obs" 2>/dev/null || :
+    fi
+}
+
 z2k_gvsub_start()
 {
     z2k_gvsub_enabled || return 0
@@ -3270,9 +3284,7 @@ z2k_gvsub_start()
     mkdir -p "${Z2K_GVSUB_LOG%/*}" 2>/dev/null
     # Журнал в /tmp (tmpfs): при старте обрезаем, чтобы не копился.
     : > "$Z2K_GVSUB_LOG" 2>/dev/null
-    # Если файл DoH/DoT-наблюдений уже создан (например тестом или от root),
-    # отдаём владельца nobody, чтобы nfqws2 продолжал дописывать туда строки.
-    [ -f /tmp/z2k-gv-observed.tsv ] && chown nobody /tmp/z2k-gv-observed.tsv 2>/dev/null || :
+    if command -v z2k_gvsub_ensure_observed_owner >/dev/null 2>&1; then z2k_gvsub_ensure_observed_owner; fi
     local _no6=""
     [ "$DISABLE_IPV6" = "1" ] && _no6="-no-ipv6"
     # Каркас (цепочки, очередь DNS) служба держит и сама: хук NDM чинит правила

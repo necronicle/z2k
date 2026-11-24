@@ -5474,7 +5474,7 @@ _z2k_sweep_our_rules() {
     # держит очередь ответов DNS (210) и при живом процессе вернула бы каркас.
     _p=$(cat /var/run/z2k-gvsub.pid 2>/dev/null)
     [ -n "$_p" ] && kill "$_p" 2>/dev/null
-    rm -f /var/run/z2k-gvsub.pid /tmp/z2k-gvsub.json /tmp/z2k-gvsub.json.neutral /tmp/z2k-gv-ips.txt
+    rm -f /var/run/z2k-gvsub.pid /tmp/z2k-gvsub.json /tmp/z2k-gvsub.json.neutral /tmp/z2k-gv-ips.txt /tmp/z2k-gv-policy.dat /tmp/z2k-gv-observed.tsv
     _q=$(sed -n 's/^QNUM=//p' "${ZAPRET2_DIR:-/opt/zapret2}/config" 2>/dev/null | tail -n 1 | tr -d "\"'")
     case "$_q" in ''|*[!0-9]*) _q=200 ;; esac
     # Z2K_GVSUB — цепочки подмены; Z2K_MSS — ограничение входящего MSS (p-88.1,

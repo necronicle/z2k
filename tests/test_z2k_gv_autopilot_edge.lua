@@ -334,6 +334,80 @@ is("TCP RST marks z2k_sg_done", true, track13.lua_state.z2k_sg_done)
 invoke_timer(tn13, ti13)
 is("late stall callback after TCP RST sends 0 RSTs", 0, #rawsend_dissects)
 
+-- 4b. TLS 1.3 CCS+ClientFinished (64B) не ставит таймер; следующий реальный AppData ставит;
+-- прогресс th_ack от клиента (ответ сервера скрыт connbytes) снимает таймер;
+-- при >=7 входящих пакетах (порог connbytes 0:10) таймер не ставится.
+reset_state()
+local track13fin = { lua_state = {} }
+local tls13_ccs_fin = "\20\3\3\0\1\1\23\3\3\0\53" .. string.rep("f", 53)
+local tls13_http_req = "\23\3\3\0\120" .. string.rep("r", 120)
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3", fwmark = 0x40000000,
+    l7payload = "tls_client_hello", track = track13fin,
+    dis = tcp4(CLI4, IP_ISP, 43011, 443, TH_ACK + TH_PUSH, 100, 200, tls_ch_rec),
+})
+z2k_autopilot_stall_guard({}, {
+    outgoing = false,
+    l7payload = "tls_server_hello", track = track13fin,
+    dis = tcp4(IP_ISP, CLI4, 443, 43011, TH_ACK + TH_PUSH, 200, 109, tls_sh_rec),
+})
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3", fwmark = 0x40000000,
+    l7payload = "unknown", track = track13fin,
+    dis = tcp4(CLI4, IP_ISP, 43011, 443, TH_ACK + TH_PUSH, 109, 209, tls13_ccs_fin),
+})
+is("TLS 1.3 CCS+ClientFinished (64B) does not arm stall timer", nil, next(timers))
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3", fwmark = 0x40000000,
+    l7payload = "unknown", track = track13fin,
+    dis = tcp4(CLI4, IP_ISP, 43011, 443, TH_ACK + TH_PUSH, 173, 209, tls13_http_req),
+})
+local tn_fin, ti_fin = next(timers)
+is("TLS 1.3 real HTTP request after ClientFinished arms timer", true, tn_fin ~= nil)
+-- Повторный пакет с тем же ack=209 НЕ снимает таймер
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "unknown", track = track13fin,
+    dis = tcp4(CLI4, IP_ISP, 43011, 443, TH_ACK, 298, 209, tls12_cli_appdata),
+})
+is("same client th_ack keeps stall timer alive", true, timers[tn_fin] ~= nil)
+-- Клиент подтвердил новые байты от сервера (ack=498 > 209) -> сервер ответил за пределами connbytes!
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "unknown", track = track13fin,
+    dis = tcp4(CLI4, IP_ISP, 43011, 443, TH_ACK + TH_PUSH, 308, 498, "\23\3\3\0\19" .. string.rep("c", 19)),
+})
+is("client th_ack progress cancels stall timer", nil, timers[tn_fin])
+is("client th_ack progress marks z2k_sg_done", true, track13fin.lua_state.z2k_sg_done)
+invoke_timer(tn_fin, ti_fin)
+is("stale timer after client th_ack progress sends 0 RSTs", 0, #rawsend_dissects)
+
+-- Поток с 7 входящими пакетами (мультидизордер ACK + ServerHello впритык к connbytes 0:10) не ставит таймер
+reset_state()
+local track_blind = { lua_state = {} }
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "tls_client_hello", track = track_blind,
+    dis = tcp4(CLI4, IP_ISP, 43012, 443, TH_ACK + TH_PUSH, 100, 200, tls_ch_rec),
+})
+for i = 1, 6 do
+    z2k_autopilot_stall_guard({}, {
+        outgoing = false, l7payload = "empty", track = track_blind,
+        dis = tcp4(IP_ISP, CLI4, 443, 43012, TH_ACK, 200, 109, ""),
+    })
+end
+z2k_autopilot_stall_guard({}, {
+    outgoing = false, l7payload = "tls_server_hello", track = track_blind,
+    dis = tcp4(IP_ISP, CLI4, 443, 43012, TH_ACK + TH_PUSH, 200, 109, tls_sh_rec),
+})
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "unknown", track = track_blind,
+    dis = tcp4(CLI4, IP_ISP, 43012, 443, TH_ACK + TH_PUSH, 109, 209, tls13_http_req),
+})
+is("stall guard skips arming when in_pkts >= 7 near connbytes cap", nil, next(timers))
+is("stall guard marks done when blinded by reply connbytes", true, track_blind.lua_state.z2k_sg_done)
+
 -- 5. Preflight 2.0 giveup timer cleanup on replace and timeout
 reset_state()
 local syn_rep1 = tcp4(CLI4, IP_BAD_BYP, 44001, 443, TH_SYN, 5000, 0, "")

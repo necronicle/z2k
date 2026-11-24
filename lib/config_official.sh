@@ -2272,16 +2272,16 @@ create_official_config() {
     nfqws2_opt_value=$(echo "$nfqws2_opt_section" | sed -n '/^NFQWS2_OPT="/,/^"$/{ /^NFQWS2_OPT="/d; /^"$/d; p; }')
 
     # Загрузить модули для dry_run_nfqws()
-    if [ -f "/opt/zapret2/common/base.sh" ]; then
-        . "/opt/zapret2/common/base.sh"
+    if [ -f "${ZAPRET2_DIR:-/opt/zapret2}/common/base.sh" ]; then
+        . "${ZAPRET2_DIR:-/opt/zapret2}/common/base.sh"
     fi
 
-    if [ -f "/opt/zapret2/common/linux_daemons.sh" ]; then
-        . "/opt/zapret2/common/linux_daemons.sh"
+    if [ -f "${ZAPRET2_DIR:-/opt/zapret2}/common/linux_daemons.sh" ]; then
+        . "${ZAPRET2_DIR:-/opt/zapret2}/common/linux_daemons.sh"
 
         # Установить временно NFQWS2_OPT для проверки
         export NFQWS2_OPT="$nfqws2_opt_value"
-        export NFQWS2="/opt/zapret2/nfq2/nfqws2"
+        export NFQWS2="${ZAPRET2_DIR:-/opt/zapret2}/nfq2/nfqws2"
 
         # Проверить опции (dry_run может ложно падать если lua/blob файлы
         # ещё не установлены — это нормально при первой установке)

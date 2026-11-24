@@ -16,8 +16,10 @@
 
 local DEFAULT_POLICY_PATH = "/tmp/z2k-gv-policy.dat"
 local DEFAULT_OBSERVED_PATH = "/tmp/z2k-gv-observed.tsv"
+local DEFAULT_NEUTRAL_PATH = "/tmp/z2k-gvsub.json.neutral"
 
 local CACHE_TTL_SEC = 1.0
+local NEUTRAL_CACHE_TTL_SEC = 0.5
 local DEFAULT_POLICY_STALE_SEC = 300
 local OBSERVED_DEDUPE_SEC = 120.0
 local OBSERVED_MAX_LINES = 256
@@ -39,6 +41,7 @@ local orig_io_open = io and io.open
 local ip4_id_seq = 0
 local override_policy_path = nil
 local override_observed_path = nil
+local override_neutral_path = nil
 
 local policy_cache = {
     loaded = false,
@@ -46,6 +49,14 @@ local policy_cache = {
     path = nil,
     open_fn = nil,
     policy = nil,
+}
+
+local neutral_cache = {
+    loaded = false,
+    loaded_at = 0,
+    path = nil,
+    open_fn = nil,
+    probes = {},
 }
 
 local observed_seen = {}
@@ -114,6 +125,16 @@ local function observed_path()
     if env and env ~= "" then return env end
     if override_observed_path and override_observed_path ~= "" then return override_observed_path end
     return DEFAULT_OBSERVED_PATH
+end
+
+local function neutral_path(arg)
+    if type(arg) == "table" and type(arg.neutral_path) == "string" and arg.neutral_path ~= "" then
+        return arg.neutral_path
+    end
+    local env = os and os.getenv and os.getenv("Z2K_NEUTRAL_FILE_OVERRIDE")
+    if env and env ~= "" then return env end
+    if override_neutral_path and override_neutral_path ~= "" then return override_neutral_path end
+    return DEFAULT_NEUTRAL_PATH
 end
 
 local function policy_stale_sec()
@@ -428,6 +449,73 @@ local function load_policy()
     return pol
 end
 
+local function raw_to_hex(raw)
+    if type(raw) ~= "string" then return nil end
+    local n = #raw
+    if n ~= 4 and n ~= 16 then return nil end
+    local out = {}
+    for i = 1, n do
+        out[i] = string.format("%02x", raw:byte(i))
+    end
+    return table.concat(out)
+end
+
+local function parse_neutral_probes_file(path, open_fn)
+    local f = open_fn(path, "r")
+    if not f then return {} end
+    local probes = {}
+    local count = 0
+    for line in f:lines() do
+        local hex = line:match("^probe%s+([0-9a-fA-F]+)")
+        if hex and (#hex == 8 or #hex == 32) then
+            probes[hex:lower()] = true
+            count = count + 1
+            if count >= 4096 then break end
+        end
+    end
+    f:close()
+    return probes
+end
+
+local function load_neutral_probes(arg)
+    local open_fn = io and io.open
+    if not open_fn then return nil end
+    local path = neutral_path(arg)
+    local now = clock_now()
+
+    -- Короткий TTL (0.5с) гарантирует >2x запас до зонда gvsub (1050мс) и быструю очистку после снятия probe.
+    if neutral_cache.loaded
+        and open_fn == orig_io_open
+        and neutral_cache.open_fn == open_fn
+        and neutral_cache.path == path
+        and now >= neutral_cache.loaded_at
+        and (now - neutral_cache.loaded_at) < NEUTRAL_CACHE_TTL_SEC then
+        return neutral_cache.probes
+    end
+
+    local probes = parse_neutral_probes_file(path, open_fn)
+    neutral_cache.loaded = true
+    neutral_cache.loaded_at = now
+    neutral_cache.path = path
+    neutral_cache.open_fn = open_fn
+    neutral_cache.probes = probes
+    return probes
+end
+
+local function is_probe_guard_dis(dis, arg)
+    if type(dis) ~= "table" then return false end
+    local raw_dst = nil
+    if dis.ip6 and dis.ip6.ip6_dst then
+        raw_dst = dis.ip6.ip6_dst
+    elseif dis.ip and dis.ip.ip_dst then
+        raw_dst = dis.ip.ip_dst
+    end
+    local hex = raw_to_hex(raw_dst)
+    if not hex then return false end
+    local probes = load_neutral_probes(arg)
+    return probes ~= nil and probes[hex] == true
+end
+
 function z2k_autopilot_safety_fuse(header)
     if not header then return false end
     return ((header.usable_v4 or 0) + (header.usable_v6 or 0)) >= 1
@@ -507,7 +595,7 @@ local function append_observed_line(dst_text, host)
     local new_line = dst_text .. "\t" .. host .. "\n"
 
     -- Читаем текущий файл для ограничения объёма (<= 256 строк / 32 KiB) без os.rename/os.remove,
-    -- чтобы не ломать права (nfqws2 работает под nobody, gvsub усекает in-place).
+    -- чтобы не ломать права (nfqws2 работает под nobody и сам усекает in-place; gvsub только читает).
     local rf = open_fn(path, "r")
     if rf then
         local content = rf:read(OBSERVED_MAX_BYTES + 1024) or ""
@@ -663,6 +751,14 @@ function z2k_autopilot_quic(ctx, desync)
         return
     end
 
+    local arg = desync.arg or {}
+    -- Собственные зонды Контура-2 от gvsub идут с роутера (ifin пустой/nil) и защищены маркером `probe <hex>`.
+    -- Трафик LAN-клиентов (ifin непустой, например br0) НИКОГДА не обходит QUIC-фильтр во время зонда.
+    if (not desync.ifin or desync.ifin == "") and is_probe_guard_dis(dis, arg) then
+        dlog("z2k_autopilot_quic: bypass active gvsub probe")
+        return
+    end
+
     observe_packet(desync)
 
     local entry, header, pol = z2k_autopilot_lookup_dis(dis)
@@ -670,7 +766,6 @@ function z2k_autopilot_quic(ctx, desync)
         return
     end
 
-    local arg = desync.arg or {}
     local host = desync.track and desync.track.hostname
     local is_gv_host = is_gv_or_play_hostname(host)
     local is_other_host = (type(host) == "string" and host ~= "" and not is_gv_host)
@@ -742,6 +837,12 @@ function z2k_autopilot_tcp_fastfail(ctx, desync)
     end
     local tcp = dis.tcp
     if band(tcp.th_flags, TCP_FLAG_SYN) == 0 or band(tcp.th_flags, TCP_FLAG_ACK) ~= 0 then
+        return
+    end
+
+    -- Собственные перепроверки Контура-2 от gvsub (локальный роутер без ifin + `probe <hex>`) не режем старым dead/unbypassable-вердиктом.
+    if (not desync.ifin or desync.ifin == "") and is_probe_guard_dis(dis, desync.arg) then
+        dlog("z2k_autopilot_tcp_fastfail: bypass active gvsub probe")
         return
     end
 
@@ -858,8 +959,51 @@ function z2k_autopilot_stall_timer(name, st)
         )
         rawsend_dissect(cli_rst, { ifout = st.cli_iface })
         rawsend_dissect(srv_rst, { ifout = st.srv_iface, fwmark = st.fwmark })
-        dlog("z2k_autopilot_stall_guard: bidirectional RST sent after stall")
+        dlog(string.format(
+            "z2k_autopilot_stall_guard: bidirectional RST sent after stall srv=%s:%d cli=%s:%d cli_if=%s srv_if=%s",
+            tostring(bin_to_ip_text(st.srv_ip)), tonumber(st.srv_port) or 0,
+            tostring(bin_to_ip_text(st.cli_ip)), tonumber(st.cli_port) or 0,
+            tostring(st.cli_iface or ""), tostring(st.srv_iface or "")
+        ))
     end
+end
+
+-- При штатном NFQWS2_TCP_PKT_IN=10 (connbytes 0:10 на reply) kernel перестаёт отдавать ответы
+-- после 10-го пакета (включая ACK на multidisorder). При >=7 входящих внутри guard окно почти пусто.
+local STALL_GUARD_MAX_IN_PKTS = 7
+
+-- В TLS 1.3 ClientFinished (опциональный CCS 6Б + одна запись 0x17 48..76Б полезной нагрузки)
+-- не является HTTP-запросом и не должен запускать сторож зависания (напр., на preconnect-сокете).
+local function is_tls13_client_finished(sbuf)
+    if type(sbuf) ~= "string" then return false end
+    local sn = #sbuf
+    if sn < 53 or sn > 86 then return false end
+    local pos = 1
+    local rec_count = 0
+    local app_count = 0
+    local app_rec_len = 0
+    while pos + 4 <= sn do
+        local ct, vmaj, vmin, hi, lo = sbuf:byte(pos, pos + 4)
+        if not ct or ct < 20 or ct > 23 or vmaj ~= 3 or vmin > 4 then
+            return false
+        end
+        local rlen = hi * 256 + lo
+        if pos + 4 + rlen > sn then
+            return false
+        end
+        rec_count = rec_count + 1
+        if rec_count > 2 then
+            return false
+        end
+        if ct == 23 then
+            app_count = app_count + 1
+            app_rec_len = rlen
+        elseif ct ~= 20 then
+            return false
+        end
+        pos = pos + 5 + rlen
+    end
+    return pos == sn + 1 and app_count == 1 and app_rec_len >= 48 and app_rec_len <= 76
 end
 
 -- --lua-desync=z2k_autopilot_stall_guard — Guard 4: сторож зависания ISP GGC после ServerHello.
@@ -934,7 +1078,10 @@ function z2k_autopilot_stall_guard(ctx, desync)
             srv_port = r_port,
             saw_client_hello = false,
             saw_server_hello = false,
+            skipped_tls13_fin = false,
+            in_pkts = 0,
             armed = false,
+            arm_ack = nil,
         }
         crec.z2k_sg = st
     end
@@ -960,10 +1107,11 @@ function z2k_autopilot_stall_guard(ctx, desync)
         if not st.cli_next_seq or seq_ge_safe(c_next, st.cli_next_seq) then
             st.cli_next_seq = c_next
         end
-        if ack and not st.srv_next_seq then
+        if ack and (not st.srv_next_seq or seq_ge_safe(tcp.th_ack, st.srv_next_seq)) then
             st.srv_next_seq = tcp.th_ack
         end
     else
+        st.in_pkts = (st.in_pkts or 0) + 1
         local s_next = add_u32(tcp.th_seq, plen + (syn and 1 or 0) + (fin and 1 or 0))
         if not st.srv_next_seq or seq_ge_safe(s_next, st.srv_next_seq) then
             st.srv_next_seq = s_next
@@ -977,6 +1125,23 @@ function z2k_autopilot_stall_guard(ctx, desync)
         cancel_stall_timer(st)
         st.armed = false
         crec.z2k_sg_done = true
+        return
+    end
+
+    if desync.outgoing and st.armed and ack and st.arm_ack and seq_ge_safe(tcp.th_ack, add_u32(st.arm_ack, 1)) then
+        cancel_stall_timer(st)
+        st.armed = false
+        crec.z2k_sg_done = true
+        dlog(string.format(
+            "z2k_autopilot_stall_guard: cancelled by client ACK progress srv=%s:%d cli=%s:%d",
+            tostring(bin_to_ip_text(st.srv_ip)), tonumber(st.srv_port) or 0,
+            tostring(bin_to_ip_text(st.cli_ip)), tonumber(st.cli_port) or 0
+        ))
+        if instance_cutoff_shim then
+            instance_cutoff_shim(ctx, desync)
+        elseif instance_cutoff then
+            instance_cutoff(ctx, desync)
+        end
         return
     end
 
@@ -1021,6 +1186,12 @@ function z2k_autopilot_stall_guard(ctx, desync)
             cancel_stall_timer(st)
             st.armed = false
             crec.z2k_sg_done = true
+            dlog(string.format(
+                "z2k_autopilot_stall_guard: cancelled by server reply srv=%s:%d cli=%s:%d len=%d",
+                tostring(bin_to_ip_text(st.srv_ip)), tonumber(st.srv_port) or 0,
+                tostring(bin_to_ip_text(st.cli_ip)), tonumber(st.cli_port) or 0,
+                plen
+            ))
             if instance_cutoff_shim then
                 instance_cutoff_shim(ctx, desync)
             elseif instance_cutoff then
@@ -1045,6 +1216,25 @@ function z2k_autopilot_stall_guard(ctx, desync)
         if tls_kind == "control" or tls_kind == "alert" then
             return
         end
+        if (st.in_pkts or 0) >= STALL_GUARD_MAX_IN_PKTS then
+            crec.z2k_sg_done = true
+            dlog(string.format(
+                "z2k_autopilot_stall_guard: skip arming near reply connbytes cap (%d pkts) srv=%s:%d cli=%s:%d",
+                tonumber(st.in_pkts) or 0,
+                tostring(bin_to_ip_text(st.srv_ip)), tonumber(st.srv_port) or 0,
+                tostring(bin_to_ip_text(st.cli_ip)), tonumber(st.cli_port) or 0
+            ))
+            if instance_cutoff_shim then
+                instance_cutoff_shim(ctx, desync)
+            elseif instance_cutoff then
+                instance_cutoff(ctx, desync)
+            end
+            return
+        end
+        if not st.skipped_tls13_fin and is_tls13_client_finished(sbuf) then
+            st.skipped_tls13_fin = true
+            return
+        end
         local entry, header = z2k_autopilot_lookup_dis(dis)
         if not z2k_autopilot_safety_fuse(header) then
             return
@@ -1052,6 +1242,14 @@ function z2k_autopilot_stall_guard(ctx, desync)
         local raw_ms = (entry and entry.stall_ms) or (header and header.ggc_stall_guard_ms) or DEFAULT_STALL_MS
         local stall_ms = clamp_num(math.floor(raw_ms), MIN_STALL_MS, MAX_STALL_MS)
         st.armed = true
+        st.arm_ack = st.srv_next_seq
+        dlog(string.format(
+            "z2k_autopilot_stall_guard: armed %dms srv=%s:%d cli=%s:%d len=%d tls=%s cli_if=%s",
+            stall_ms,
+            tostring(bin_to_ip_text(st.srv_ip)), tonumber(st.srv_port) or 0,
+            tostring(bin_to_ip_text(st.cli_ip)), tonumber(st.cli_port) or 0,
+            sn, tostring(tls_kind), tostring(st.cli_iface or "")
+        ))
         if type(timer_set) == "function" then
             st.timer_name = "z2k_sg_" .. st.key
             active_stall_timers[st.timer_name] = st
@@ -1060,13 +1258,20 @@ function z2k_autopilot_stall_guard(ctx, desync)
     end
 end
 
-function z2k_autopilot_set_paths(pol, obs)
+function z2k_autopilot_set_paths(pol, obs, neutral)
     override_policy_path = pol
     override_observed_path = obs
+    override_neutral_path = neutral
     policy_cache.loaded = false
     policy_cache.loaded_at = 0
     policy_cache.path = nil
+    policy_cache.open_fn = nil
     policy_cache.policy = nil
+    neutral_cache.loaded = false
+    neutral_cache.loaded_at = 0
+    neutral_cache.path = nil
+    neutral_cache.open_fn = nil
+    neutral_cache.probes = {}
 end
 
 function z2k_autopilot_reset()
@@ -1075,6 +1280,11 @@ function z2k_autopilot_reset()
     policy_cache.path = nil
     policy_cache.open_fn = nil
     policy_cache.policy = nil
+    neutral_cache.loaded = false
+    neutral_cache.loaded_at = 0
+    neutral_cache.path = nil
+    neutral_cache.open_fn = nil
+    neutral_cache.probes = {}
     observed_seen = {}
     observed_seen_count = 0
     rst_history = {}

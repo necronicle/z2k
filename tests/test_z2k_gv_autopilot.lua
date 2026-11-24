@@ -107,7 +107,8 @@ local tmp_base = os.tmpname()
 os.remove(tmp_base)
 local pol_path = tmp_base .. ".policy.dat"
 local obs_path = tmp_base .. ".observed.tsv"
-z2k_autopilot_set_paths(pol_path, obs_path)
+local neutral_path = tmp_base .. ".gvsub.neutral"
+z2k_autopilot_set_paths(pol_path, obs_path, neutral_path)
 
 local function write_file(path, text)
     local f = assert(io.open(path, "w"))
@@ -126,6 +127,7 @@ end
 local function clear_files()
     os.remove(pol_path)
     os.remove(obs_path)
+    os.remove(neutral_path)
 end
 
 local function reset_all()
@@ -445,6 +447,42 @@ do
     z2k_autopilot_reset()
     is("other domain rejected when global_quic_blocked=1", VERDICT_DROP, z2k_autopilot_quic({}, d_other))
     is("googlevideo quic_ok=1 still allowed even if global_quic_blocked=1", nil, z2k_autopilot_quic({}, d_ok))
+
+    -- Активный probe-маркер gvsub в .neutral пропускает локальные QUIC-зонды (ifin=""/nil),
+    -- но НЕ открывает доступ LAN-клиентам (ifin="br0") и не засоряет observed.tsv.
+    write_file(pol_path, string.format(
+        "type=header\tversion=1\tupdated=%d\tusable_v4=2\tusable_v6=1\tglobal_quic_blocked=1\n"
+        .. "type=ip\taddr=74.125.100.19\tkind=google\tverdict=good_direct\tquic_ok=0\n"
+        .. "type=ip\taddr=2a00:1450:4005:2::99\tkind=google\tverdict=good_direct\tquic_ok=0\n",
+        math.floor(fake_now)
+    ))
+    write_file(neutral_path, "probe 4a7d6413\nprobe 4a7d6414\nprobe 2A001450400500020000000000000099\n")
+    os.remove(obs_path)
+    reset_all()
+    local probe_v4 = assert(z2k_autopilot_parse_ip("74.125.100.19"))
+    local probe_unk = assert(z2k_autopilot_parse_ip("74.125.100.20"))
+    local probe_v6 = assert(z2k_autopilot_parse_ip("2a00:1450:4005:2::99"))
+    local d_probe_local = { outgoing = true, l7payload = "quic_initial", ifin = "", dis = udp_dis(false, CLI4, probe_v4), track = { hostname = "rr4---sn-probe.googlevideo.com" } }
+    local d_probe_unk = { outgoing = true, l7payload = "quic_initial", dis = udp_dis(false, CLI4, probe_unk), track = { hostname = "rr2---sn-probe.googlevideo.com" } }
+    local d_probe_lan = { outgoing = true, l7payload = "quic_initial", ifin = "br0", dis = udp_dis(false, CLI4, probe_v4), track = { hostname = "rr4---sn-probe.googlevideo.com" } }
+    local d_probe_v6_local = { outgoing = true, l7payload = "quic_initial", ifin = "", dis = udp_dis(true, CLI6, probe_v6), track = { hostname = "rr5---sn-probe.googlevideo.com" } }
+    local d_probe_v6_lan = { outgoing = true, l7payload = "quic_initial", ifin = "br0", dis = udp_dis(true, CLI6, probe_v6), track = { hostname = "rr5---sn-probe.googlevideo.com" } }
+
+    is("gvsub local IPv4 QUIC probe bypasses quic_ok=0 & global=1", nil, z2k_autopilot_quic({}, d_probe_local))
+    is("gvsub local unknown QUIC probe bypasses", nil, z2k_autopilot_quic({}, d_probe_unk))
+    is("gvsub local QUIC probe sends 0 ICMP", 0, #rawsend_pkts)
+    is("gvsub local QUIC probe does not cancel plan", 0, cancels)
+    is("gvsub local QUIC probe does not write observed.tsv", nil, read_file(obs_path))
+    is("LAN IPv4 client still blocked during active probe", VERDICT_DROP, z2k_autopilot_quic({}, d_probe_lan))
+    is("LAN IPv4 client got ICMP during probe", 1, #rawsend_pkts)
+    is("gvsub local IPv6 QUIC probe (uppercase hex) bypasses", nil, z2k_autopilot_quic({}, d_probe_v6_local))
+    is("LAN IPv6 client still blocked during active probe", VERDICT_DROP, z2k_autopilot_quic({}, d_probe_v6_lan))
+
+    -- После снятия маркера probe из .neutral и истечения 0.5s TTL локальный QUIC снова блокируется
+    write_file(neutral_path, "")
+    fake_now = fake_now + 0.6
+    reset_all()
+    is("local IPv4 QUIC blocked again after probe TTL expires", VERDICT_DROP, z2k_autopilot_quic({}, d_probe_local))
 end
 
 -- ===== 5. Guard 2: TCP Fast-Fail + Safety Fuse + Anti-Storm ================
@@ -548,6 +586,23 @@ do
     fake_now = fake_now + 3.1
     is("antistorm slides open after 3.1s", VERDICT_DROP, z2k_autopilot_tcp_fastfail({}, {
         outgoing = true, ifin = "br0", dis = tcp4_dis(CLI4, ip_dead_g, 41008, 443, TH_SYN, 9000)
+    }))
+
+    -- Активный probe-маркер gvsub пропускает локальную перепроверку dead/unbypassable TCP (ifin=""),
+    -- но сохраняет мгновенный fastfail RST для LAN-клиентов (ifin="br0").
+    write_file(neutral_path, "probe acd90a01\n")
+    reset_all()
+    is("gvsub local dead_l3 TCP re-probe bypasses fastfail", nil, z2k_autopilot_tcp_fastfail({}, {
+        outgoing = true, ifin = "", dis = tcp4_dis(CLI4, ip_dead_g, 41009, 443, TH_SYN, 9100)
+    }))
+    is("gvsub local TCP re-probe sends 0 RST", 0, #rawsend_dissects)
+    is("LAN client dead_l3 STILL fastfails during active probe", VERDICT_DROP, z2k_autopilot_tcp_fastfail({}, {
+        outgoing = true, ifin = "br0", dis = tcp4_dis(CLI4, ip_dead_g, 41010, 443, TH_SYN, 9200)
+    }))
+    write_file(neutral_path, "")
+    fake_now = fake_now + 0.6
+    is("local dead_l3 TCP fastfails again after probe clears and 0.5s TTL expires", VERDICT_DROP, z2k_autopilot_tcp_fastfail({}, {
+        outgoing = true, ifin = "", dis = tcp4_dis(CLI4, ip_dead_g, 41011, 443, TH_SYN, 9300)
     }))
 end
 
