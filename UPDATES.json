@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "branch": "z2k-enhanced",
-  "seq": 193,
-  "current": "p-88.15",
+  "seq": 194,
+  "current": "p-88.16",
   "install_map": {
   "common/ipt.sh": ["/opt/zapret2/common/ipt.sh"],
   "files/000-zapret2.sh": ["/opt/etc/ndm/netfilter.d/000-zapret2.sh"],
@@ -284,7 +284,7 @@
   "webpanel/www/fonts/FiraSans-600-latin.woff2": "f3cc7b2756c566cf8172bfd269d805c4a1eb953f6b6ce8bf2b2ddf49c5422189",
   "webpanel/www/fonts/FiraSans-700-cyrillic.woff2": "42a8013e902099b563e434d3ccb3bed87ff6d6af8d80fe51ff203f2ac487673b",
   "webpanel/www/fonts/FiraSans-700-latin.woff2": "811e73619cc2909792e8fa134c8d1ed714b898310dd4cc218fc29e40a5dc2890",
-  "webpanel/www/index.html": "e537bcc2926eaf41258614324a5f14695a3a47d8f24ee8b045dfa910536e5290",
+  "webpanel/www/index.html": "33eae7ff478de013ca308d113da735ce042ae9cbff6dda504dd4845d831ea586",
   "webpanel/www/js/chrome.js": "3e2217758cde6d87f4809aaf65c4aafca582b936d9c53b19abb4adac1479fdef",
   "webpanel/www/js/core/api.js": "eaa798b49c02373a1cffcdee447587f9969194323dd5471ac74a07d4af7b235f",
   "webpanel/www/js/core/auth.js": "7afe5b139737783402f45fb654b9383b24d68779aae93a0f5f1847608252ad8c",
@@ -674,6 +674,7 @@
 {"v": "p-88.10", "type": "patch", "ts": "2026-11-22T12:16:25Z", "ref": "p-88.10", "desc": "Видеокэши c.youtube.com снова используют обычные TCP-стратегии YouTube. В веб-панель добавлена благодарность Kurdt_Kobain за поддержку проекта, а в README возвращена команда полной зачистки zapret и zapret2.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/lists/extra_strats/TCP/YT_GV/List.txt", "files/z2k-geosite.sh", "lib/config_official.sh", "lib/menu.sh", "webpanel/www/js/pages/credits.js", "z2k-detect/builds/z2k-detect-linux-386", "z2k-detect/builds/z2k-detect-linux-amd64", "z2k-detect/builds/z2k-detect-linux-arm", "z2k-detect/builds/z2k-detect-linux-arm64", "z2k-detect/builds/z2k-detect-linux-mips", "z2k-detect/builds/z2k-detect-linux-mips64le", "z2k-detect/builds/z2k-detect-linux-mipsle", "z2k-detect/builds/z2k-detect-linux-ppc64", "z2k-detect/builds/z2k-detect-linux-riscv64", "UPDATES.json"], "steps": ["regen-config", "validate-config", "refresh-binaries", "restart-service"], "full_install": false},
 {"v": "p-88.11", "type": "patch", "ts": "2026-11-22T14:20:57Z", "ref": "p-88.11", "desc": "Для Instagram, WhatsApp и Facebook CDN роутер сохраняет все проверенные адреса и ищет отдельную рабочую замену для каждого недоступного. В дополнительные домены добавлен blockme.site. Видеокэши c.youtube.com по-прежнему используют обычные стратегии YouTube.", "changed_files": ["webpanel/www/index.html", "files/lists/extra-domains.txt", "files/z2k-insta-ip-refresh.sh", "lib/install.sh", "lib/menu.sh", "UPDATES.json"], "steps": [], "full_install": false},
 {"v": "p-88.13", "type": "patch", "ts": "2026-11-22T18:26:07Z", "ref": "p-88.13", "desc": "Роутер теперь учитывает адреса видеосерверов YouTube, когда устройство обращается к внешнему DNS-серверу по UDP. Исправили проверку DNS по IPv6 и через TLS. Добавили Сергея в благодарности за поддержку проекта.", "changed_files": ["webpanel/www/index.html", "files/S99zapret2.new", "files/z2k-dns-check.sh", "lib/menu.sh", "webpanel/cgi/actions.sh", "webpanel/www/js/pages/credits.js", "z2k-detect/builds/z2k-detect-linux-386", "z2k-detect/builds/z2k-detect-linux-amd64", "z2k-detect/builds/z2k-detect-linux-arm", "z2k-detect/builds/z2k-detect-linux-arm64", "z2k-detect/builds/z2k-detect-linux-mips", "z2k-detect/builds/z2k-detect-linux-mips64le", "z2k-detect/builds/z2k-detect-linux-mipsle", "z2k-detect/builds/z2k-detect-linux-ppc64", "z2k-detect/builds/z2k-detect-linux-riscv64", "UPDATES.json"], "steps": ["refresh-binaries", "restart-service"], "full_install": false},
-{"v": "p-88.15", "type": "patch", "ts": "2026-11-23T09:24:54Z", "ref": "p-88.15", "desc": "Обновили инструкции по настройкам видео YouTube и добавили подсказку по сортировке стратегий по возрасту.", "changed_files": ["webpanel/www/index.html", "webpanel/www/js/pages/strategies.js", "UPDATES.json"], "steps": [], "full_install": false}
+{"v": "p-88.15", "type": "patch", "ts": "2026-11-23T09:24:54Z", "ref": "p-88.15", "desc": "Обновили инструкции по настройкам видео YouTube и добавили подсказку по сортировке стратегий по возрасту.", "changed_files": ["webpanel/www/index.html", "webpanel/www/js/pages/strategies.js", "UPDATES.json"], "steps": [], "full_install": false},
+{"v": "p-88.16", "type": "patch", "ts": "2026-11-24T06:46:19Z", "ref": "p-88.16", "desc": "Контрольный выпуск. Только попробуй пожаловаться, что эта версия хоть что-то сломала. Ведь в этой версии ничего не менялось. Иди читай документацию, а не ной.", "changed_files": ["webpanel/www/index.html", "UPDATES.json"], "steps": [], "full_install": false}
   ]
 }
