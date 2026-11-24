@@ -1094,32 +1094,74 @@ toggle_dynamic_ttl() {
     restart_service_if_running
 }
 
+toggle_yt_autopilot() {
+    # Z2K_YT_AUTOPILOT — автопилот видео YouTube (auto|1|0, по умолчанию auto).
+    # При включении (auto|1) гарантируем Z2K_GV_SERVER_REPLY2=1, чтобы служба
+    # z2k-detect gvsub не осталась отключённой при активном автопилоте.
+    local want="$1"
+    case "$want" in auto|1|0) ;; *) return 1 ;; esac
+    set_flag "Z2K_YT_AUTOPILOT" "$want" "$CONFIG_FILE" || return 1
+    if [ "$want" != "0" ]; then
+        set_flag "Z2K_GV_SERVER_REPLY2" "1" "$CONFIG_FILE" || return 1
+    fi
+    regenerate_config || return 1
+    restart_service_if_running
+}
+
 toggle_yt_quic_off() {
-    # Z2K_YT_QUIC_OFF — QUIC к YouTube не пропускается (по умолчанию 0).
+    # Z2K_YT_QUIC_OFF — QUIC к YouTube: 0/auto = решает автопилот, 1 = всегда отказ,
+    # off = принудительно не отключать QUIC для YouTube.
     # Профиль вписывает генератор, поэтому пересборка и перезапуск.
     local want="$1"
-    case "$want" in 0|1) ;; *) return 1 ;; esac
+    case "$want" in 0|1|auto|off) ;; *) return 1 ;; esac
     set_flag "Z2K_YT_QUIC_OFF" "$want" "$CONFIG_FILE" || return 1
     regenerate_config || return 1
     restart_service_if_running
 }
 
 toggle_quic_off() {
-    # Z2K_QUIC_OFF — весь QUIC не пропускается, кроме исключений (по умолчанию 0).
+    # Z2K_QUIC_OFF — весь QUIC через TCP: 0/auto = решает автопилот (global_quic_blocked),
+    # 1 = всегда отказ, off = принудительно не отключать QUIC глобально.
     local want="$1"
-    case "$want" in 0|1) ;; *) return 1 ;; esac
+    case "$want" in 0|1|auto|off) ;; *) return 1 ;; esac
     set_flag "Z2K_QUIC_OFF" "$want" "$CONFIG_FILE" || return 1
     regenerate_config || return 1
     restart_service_if_running
 }
 
 toggle_gv_preflight() {
-    # Z2K_GV_SERVER_REPLY2 — обход по ответу сервера в профиле googlevideo (по умолчанию 1).
-    # Инстанс вписывает генератор, а правило NAT ставит S99 по собранному конфигу,
-    # поэтому нужны и пересборка, и перезапуск.
+    # Z2K_GV_SERVER_REPLY2 / Z2K_GV_PREFLIGHT_MODE — обход по ответу сервера в профиле googlevideo.
+    # 0 сохраняет прежнюю совместимость (отключает шаг и службу gvsub),
+    # auto|1|off управляют режимом preflight без отключения gvsub при активном автопилоте.
     local want="$1"
-    case "$want" in 0|1) ;; *) return 1 ;; esac
-    set_flag "Z2K_GV_SERVER_REPLY2" "$want" "$CONFIG_FILE" || return 1
+    case "$want" in
+        0)
+            set_flag "Z2K_GV_SERVER_REPLY2" "0" "$CONFIG_FILE" || return 1
+            ;;
+        auto)
+            set_flag "Z2K_GV_SERVER_REPLY2" "1" "$CONFIG_FILE" || return 1
+            set_flag "Z2K_GV_PREFLIGHT_MODE" "auto" "$CONFIG_FILE" || return 1
+            ;;
+        1)
+            set_flag "Z2K_GV_SERVER_REPLY2" "1" "$CONFIG_FILE" || return 1
+            set_flag "Z2K_GV_PREFLIGHT_MODE" "1" "$CONFIG_FILE" || return 1
+            ;;
+        off)
+            set_flag "Z2K_GV_PREFLIGHT_MODE" "off" "$CONFIG_FILE" || return 1
+            if command -v read_flag >/dev/null 2>&1; then
+                local _ap_val
+                _ap_val=$(read_flag "Z2K_YT_AUTOPILOT" "$CONFIG_FILE" "auto")
+                if [ "$_ap_val" = "0" ]; then
+                    set_flag "Z2K_GV_SERVER_REPLY2" "0" "$CONFIG_FILE" || return 1
+                else
+                    set_flag "Z2K_GV_SERVER_REPLY2" "1" "$CONFIG_FILE" || return 1
+                fi
+            else
+                set_flag "Z2K_GV_SERVER_REPLY2" "1" "$CONFIG_FILE" || return 1
+            fi
+            ;;
+        *) return 1 ;;
+    esac
     regenerate_config || return 1
     restart_service_if_running
 }

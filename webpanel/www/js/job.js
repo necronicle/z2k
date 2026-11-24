@@ -147,8 +147,8 @@ export function _updateGlobalUILock() {
   // снос дерева параллельно идущей переустановке — общего замка у них нет,
   // и `rm -rf` гонялся бы с записью файлов установщиком. Тем же путём второй
   // клик по самой кнопке в первые секунды порождал второе удаление.
-  document.querySelectorAll("[data-svc], #tg-enable, #tg-disable, #uninstall-btn").forEach(btn => {
-    if (busy) {
+  document.querySelectorAll("[data-svc], [data-lock-select], #tg-enable, #tg-disable, #uninstall-btn").forEach(btn => {
+    if (busyFor(btn)) {
       if (btn.dataset.lockBackup === undefined) {
         btn.dataset.lockBackup = btn.disabled ? "1" : "0";
         btn.disabled = true;
@@ -168,7 +168,7 @@ export function _updateGlobalUILock() {
     // Тот же список, что и у лока выше — иначе карточка удаления гасила бы
     // кнопку, но сама оставалась яркой, и выключенная кнопка выглядела бы
     // поломкой, а не занятостью.
-    const hasLockableControl = card.querySelector(".switch input[type=\"checkbox\"], [data-svc], #tg-enable, #tg-disable, #uninstall-btn");
+    const hasLockableControl = card.querySelector(".switch input[type=\"checkbox\"], [data-svc], [data-lock-select], #tg-enable, #tg-disable, #uninstall-btn");
     if (!hasLockableControl) return;
     if (busyFor(card)) card.classList.add("card-locked");
     else card.classList.remove("card-locked");

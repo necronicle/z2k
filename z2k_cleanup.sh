@@ -499,7 +499,7 @@ done
 # ответов DNS снимает подметание ниже (в них есть Z2K и NFQUEUE).
 _gvsub_pid=$(cat /var/run/z2k-gvsub.pid 2>/dev/null)
 [ -n "$_gvsub_pid" ] && kill "$_gvsub_pid" 2>/dev/null && log_info "  Остановлена служба подмены адресов"
-rm -f /var/run/z2k-gvsub.pid /tmp/z2k-gvsub.json /tmp/z2k-gvsub.json.neutral /tmp/z2k-gv-ips.txt
+rm -f /var/run/z2k-gvsub.pid /tmp/z2k-gvsub.json /tmp/z2k-gvsub.json.neutral /tmp/z2k-gv-ips.txt /tmp/z2k-gv-policy.dat /tmp/z2k-gv-observed.tsv
 
 # Поиск и удаление любых оставшихся правил с упоминанием nfqws/zapret в базовых цепочках.
 # Через -S: так правило снимается целиком и не зависит от номеров строк.
@@ -518,6 +518,8 @@ for fw_tool in iptables ip6tables; do
         if [ "$table" = mangle ]; then
             "$fw_tool" -w -t mangle -F Z2K_MSS 2>/dev/null
             "$fw_tool" -w -t mangle -X Z2K_MSS 2>/dev/null && log_info "  Удалена mangle/Z2K_MSS ($fw_tool)"
+            "$fw_tool" -w -t mangle -F Z2K_POL 2>/dev/null
+            "$fw_tool" -w -t mangle -X Z2K_POL 2>/dev/null && log_info "  Удалена mangle/Z2K_POL ($fw_tool)"
         fi
         # 10.11.2026: после удаления службы отказ QUIC остаться не должен.
         if [ "$table" = filter ]; then
@@ -624,11 +626,14 @@ fi
 
 log_info "Удаление iptables правил per-flow PPE de-offload..."
 ppe_rules_removed=0
-# Текущее правило, прежнее (без порта 5222) и правило QUIC. Пока тут стоял только
-# прежний вариант, текущее не снималось и поток оставался мимо ускорителя.
-for ppe_args in "-p tcp -m multiport --dports 80,443,2053,2083,2087,2096,5222,8443 -m connskip --connskip 30 -j PPE" \
+# Текущее правило (connskip 60), прежнее (connskip 30 / без порта 5222) и правило QUIC.
+# Пока тут стоял только прежний вариант, текущее не снималось и поток оставался мимо ускорителя.
+for ppe_args in "-p tcp -m multiport --dports 80,443,2053,2083,2087,2096,5222,8443 -m connskip --connskip 60 -j PPE" \
+                "-p udp --dport 443 -m connskip --connskip 60 -j PPE" \
+                "-p tcp -m multiport --dports 80,443,2053,2083,2087,2096,5222,8443 -m connskip --connskip 30 -j PPE" \
                 "-p tcp -m multiport --dports 80,443,2053,2083,2087,2096,8443 -m connskip --connskip 30 -j PPE" \
                 "-p udp --dport 443 -m connskip --connskip 30 -j PPE" \
+                "-p udp -m multiport --dports 1024:2407,2409:65535 -m connskip --connskip 60 -j PPE" \
                 "-p udp -m multiport --dports 1024:2407,2409:65535 -m connskip --connskip 30 -j PPE"; do
     for ppe_c in FORWARD PREROUTING; do
         while iptables -w -t mangle -C "$ppe_c" $ppe_args 2>/dev/null; do

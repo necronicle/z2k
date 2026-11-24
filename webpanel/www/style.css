@@ -2993,3 +2993,82 @@ input[type="checkbox"] { accent-color: var(--accent); }
 @media (max-width: 600px) {
   .wl-search input, .wl-editor textarea { font-size: 16px; }
 }
+
+/* ---------- YOUTUBE AUTOPILOT CARD ---------- */
+.ap-master-row { padding-top: 2px; }
+.ap-title-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 4px;
+}
+.ap-title-row .tg-state-badge { margin-left: 0; }
+.ap-state-manual {
+  color: var(--warn);
+  border: 1px solid var(--warn);
+  background: var(--warn-alpha-soft);
+}
+.ap-telemetry {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+@media (max-width: 640px) {
+  .ap-telemetry { grid-template-columns: 1fr; }
+}
+.ap-metric {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--bg);
+  min-width: 0;
+}
+.ap-metric-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 3px;
+}
+.ap-metric-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.ap-metric-value.ap-tone-good { color: var(--good); }
+.ap-metric-value.ap-tone-warn { color: var(--warn); }
+.ap-metric-value.ap-tone-bad  { color: var(--bad); }
+.ap-metric-value.ap-tone-muted { color: var(--text-muted); }
+.ap-metric-sub {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.ap-debug {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.ap-debug > summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  user-select: none;
+}
+.ap-debug > summary:hover { color: var(--text); }
+.ap-debug-inner { padding-top: 8px; }
+.ap-debug-note { margin-bottom: 8px; }
+.ap-override-row {
+  gap: 12px;
+  align-items: center;
+}
+.ap-override-select {
+  min-width: 170px;
+  flex-shrink: 0;
+}
+@media (max-width: 600px) {
+  .ap-override-row { flex-direction: column; align-items: stretch; }
+  .ap-override-select { width: 100%; }
+}

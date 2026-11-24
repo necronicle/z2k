@@ -497,7 +497,8 @@ hostfakesplit http_methodeol syndata pktmod udplen \
 rst rstack synack \
 z2k_quic_morph_v2 z2k_timing_morph z2k_ipfrag3 z2k_ipfrag3_tiny \
 tls_client_hello_clone z2k_sni_pick z2k_sni_fake z2k_preflight \
-z2k_quic_reject"
+z2k_quic_reject z2k_autopilot_quic z2k_autopilot_tcp_fastfail \
+z2k_autopilot_stall_guard z2k_autopilot_observe"
 
 is_known_action() {
     _action="$1"

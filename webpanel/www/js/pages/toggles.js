@@ -2,7 +2,7 @@ import { apiGet, apiPost, errHtml, errMsg, toastErr } from "../core/api.js";
 import { $app } from "../core/dom.js";
 import { _newLoad, _stale, refreshStatus } from "../core/loadorder.js";
 import { toast } from "../core/toast.js";
-import { JOB_FAIL, _updateGlobalUILock, confirmModal, jobOutcome, jobUnresolved, openJobModal, setLockAware, unresolvedMsg } from "../job.js";
+import { JOB_FAIL, _activeJobs, _updateGlobalUILock, awaitPanelBack, confirmModal, jobOutcome, jobUnresolved, openJobModal, setLockAware, unresolvedMsg } from "../job.js";
 import { AUTOHOSTLIST_WARNING, TOGGLES_RESTART_SERVICE, resyncToggle } from "./policy.js";
 
 const TOGGLE_DEFS = [
@@ -12,16 +12,6 @@ const TOGGLE_DEFS = [
     desc: "Сайты из списков РКН и автоподбор новых доменов." },
   { key: "category_discord_voice", name: "Discord Voice / STUN", category: true,
     desc: "Голос Discord и STUN, в том числе в звонках других приложений." },
-  // Отдельной карточкой под категориями: это не сервис, который можно выбрать, а
-  // приём внутри YouTube, и без категории YouTube ему не к чему применяться.
-  { key: "gv_preflight", name: "Видео YouTube: обход по ответу сервера", video: true,
-    desc: "Помогает, когда не начинаются ролики YouTube или загрузки Google Play: провайдер режет ответ сервера Google. Роутер сначала сам проходит проверку отдельным соединением и только потом отдаёт соединение устройству. Соединение с Google начинается примерно на полсекунды позже.",
-    extra: '<div class="t-desc yt-off-note" hidden>Недоступно: обход YouTube выключен.</div>' },
-  { key: "yt_quic_off", name: "YouTube без QUIC", video: true,
-    desc: "Включите, если видео YouTube подолгу висит на старте. Роутер сразу отказывает YouTube в QUIC, и браузер или приложение без ожидания переходит на обычное соединение, где работает обход видео.",
-    extra: '<div class="t-desc yt-off-note" hidden>Недоступно: обход YouTube выключен.</div>' },
-  { key: "quic_off", name: "Весь QUIC через TCP",
-    desc: "Роутер сразу отказывает в QUIC всем сайтам, и браузеры с приложениями без ожидания переходят на обычное соединение. Для тех, у кого провайдер режет QUIC везде. Сайты из исключений не затрагиваются." },
   // game_warp переехал в собственный раздел «WARP» (renderWarp) вместе с
   // управлением списками адресов — здесь его больше нет.
   { key: "customd", name: "Скрипты custom.d",
@@ -173,6 +163,7 @@ const TOGGLE_API_NAME = {
   category_youtube: "category-youtube",
   category_rkn: "category-rkn",
   category_discord_voice: "category-discord-voice",
+  yt_autopilot: "yt-autopilot",
   gv_preflight: "gv-preflight",
   yt_quic_off: "yt-quic-off",
   quic_off: "quic-off",
@@ -182,14 +173,300 @@ const TOGGLE_API_NAME = {
   autohostlist: "autohostlist",
 };
 
+const AP_OVERRIDE_DEFS = [
+  { key: "gv_preflight", name: "Обход по ответу сервера (Preflight)", video: true,
+    desc: "«Авто» проверяет адреса по политике автопилота; «Вкл» запускает пробу перед каждым соединением; «Выкл» отключает пробу без остановки службы замеров." },
+  { key: "yt_quic_off", name: "YouTube без QUIC", video: true,
+    desc: "«Авто» пропускает QUIC только для узлов, прошедших проверку 2/2; «Вкл» всегда отправляет отказ; «Выкл» запрещает автопилоту резать QUIC YouTube." },
+  { key: "quic_off", name: "Весь QUIC через TCP", video: false,
+    desc: "«Авто» отключает QUIC глобально только при выявлении блокировки на сети; «Вкл» режет весь QUIC (кроме исключений); «Выкл» отключает авто-блокировку." },
+];
+
+function normalizeOverrideVal(key, raw, apOn) {
+  const v = String(raw || "");
+  if (v === "1" || v === "off" || v === "auto") return v;
+  if (key === "gv_preflight") return v === "0" ? "off" : "auto";
+  if (v === "0") return apOn ? "auto" : "off";
+  return "auto";
+}
+
+function formatApTime(tsSec) {
+  const n = Number(tsSec);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  try {
+    return new Date(n * 1000).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  } catch (_) {
+    return "";
+  }
+}
+
+function renderAutopilotCard() {
+  const overrideRows = AP_OVERRIDE_DEFS.map(o => `
+    <div class="toggle-row ap-override-row" data-key="${o.key}">
+      <div class="t-text">
+        <div class="t-name">${o.name}</div>
+        <div class="t-desc">${o.desc}</div>
+        ${o.video ? '<div class="t-desc yt-off-note" hidden>Недоступно: обход YouTube выключен.</div>' : ""}
+      </div>
+      <select class="t-sub-select ap-override-select" id="ap-sel-${o.key}"
+              data-override="${o.key}" data-lock-select="1"
+              aria-label="${o.name}" disabled>
+        <option value="auto">Авто (по умолчанию)</option>
+        <option value="1">Принудительно Вкл</option>
+        <option value="off">Принудительно Выкл</option>
+      </select>
+    </div>`).join("");
+  return `
+    <div class="card card-compact" id="autopilot-card">
+      <div class="toggle-row ap-master-row" data-key="yt_autopilot">
+        <div class="t-text">
+          <div class="ap-title-row">
+            <h3 style="margin:0">Автопилот видео YouTube</h3>
+            <span class="tg-state-badge" id="ap-state-badge" hidden></span>
+          </div>
+          <div class="t-desc">
+            Сам измеряет доступность кэшей YouTube и Google Play, отсеивает мёртвые узлы, калибрует тайминги под ваш канал и управляет QUIC / preflight.
+          </div>
+          <div class="t-desc yt-off-note" id="ap-yt-off-note" hidden>Недоступно: обход YouTube выключен.</div>
+        </div>
+        <label class="switch" title="Автоматическое управление видео YouTube">
+          <input type="checkbox" id="ap-master-switch" aria-label="Автопилот видео YouTube" disabled>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="ap-telemetry" id="ap-telemetry">
+        <div class="ap-metric" id="ap-metric-caches">
+          <div class="ap-metric-label">Кэши видео</div>
+          <div class="ap-metric-value" id="ap-caches-val">—</div>
+          <div class="ap-metric-sub" id="ap-caches-sub">Загружаю данные автопилота…</div>
+        </div>
+        <div class="ap-metric" id="ap-metric-quic">
+          <div class="ap-metric-label">QUIC HTTP/3</div>
+          <div class="ap-metric-value" id="ap-quic-val">—</div>
+          <div class="ap-metric-sub" id="ap-quic-sub">—</div>
+        </div>
+        <div class="ap-metric" id="ap-metric-rtt">
+          <div class="ap-metric-label">Самокалибровка канала</div>
+          <div class="ap-metric-value" id="ap-rtt-val">—</div>
+          <div class="ap-metric-sub" id="ap-rtt-sub">—</div>
+        </div>
+        <div class="ap-metric" id="ap-metric-fuse">
+          <div class="ap-metric-label">Safety Fuse</div>
+          <div class="ap-metric-value" id="ap-fuse-val">—</div>
+          <div class="ap-metric-sub" id="ap-fuse-sub">—</div>
+        </div>
+      </div>
+      <details class="ap-debug disclosure" id="ap-debug">
+        <summary>Ручное переопределение (для отладки)</summary>
+        <div class="disclosure-body">
+          <div class="ap-debug-inner">
+            <p class="desc ap-debug-note">
+              По умолчанию всё работает в режиме «Авто». Меняйте отдельные параметры только при отладке на проблемной сети.
+            </p>
+            <div class="t-desc yt-off-note" id="ap-manual-note" hidden>Автопилот выключен — в ручном режиме доступно только «Принудительно Вкл» или «Принудительно Выкл».</div>
+            ${overrideRows}
+          </div>
+        </div>
+      </details>
+    </div>`;
+}
+
+function syncAutopilotBadge(ytOn, apOn, gvsubEnabled) {
+  const badge = $app.querySelector("#ap-state-badge");
+  if (!badge) return;
+  badge.hidden = false;
+  if (gvsubEnabled !== undefined) {
+    badge.dataset.gvsub = gvsubEnabled === false ? "0" : "1";
+  }
+  const gvsubOk = badge.dataset.gvsub !== "0";
+  if (!ytOn) {
+    badge.textContent = "Недоступно: обход YouTube выключен";
+    badge.className = "tg-state-badge tg-state-off";
+  } else if (apOn && !gvsubOk) {
+    badge.textContent = "Без замеров: gvsub выключен";
+    badge.className = "tg-state-badge ap-state-manual";
+  } else if (apOn) {
+    badge.textContent = "Автопилот активен";
+    badge.className = "tg-state-badge tg-state-on";
+  } else {
+    badge.textContent = "Ручной режим";
+    badge.className = "tg-state-badge ap-state-manual";
+  }
+}
+
+function syncAutopilotModeControls(apOn) {
+  const manualNote = $app.querySelector("#ap-manual-note");
+  if (manualNote) manualNote.hidden = apOn;
+  AP_OVERRIDE_DEFS.forEach(o => {
+    const sel = $app.querySelector(`#ap-sel-${o.key}`);
+    if (!sel) return;
+    const autoOpt = sel.querySelector('option[value="auto"]');
+    if (autoOpt) autoOpt.disabled = !apOn;
+  });
+}
+
+function updateAutopilotCard(s) {
+  const t = (s && s.toggles) || {};
+  const ap = (s && s.autopilot) || {};
+  const ytOn = t.category_youtube === "1";
+  const apOn = t.yt_autopilot !== "0";
+  const gvsubEnabled = ap.gvsub_enabled !== false;
+
+  syncAutopilotBadge(ytOn, apOn, gvsubEnabled);
+
+  const masterBox = $app.querySelector("#ap-master-switch");
+  if (masterBox) {
+    masterBox.checked = apOn;
+    setLockAware(masterBox, false);
+  }
+
+  const ytNote = $app.querySelector("#ap-yt-off-note");
+  if (ytNote) ytNote.hidden = ytOn;
+
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const setMetric = (valId, subId, valText, subText, tone) => {
+    const valEl = $app.querySelector("#" + valId);
+    const subEl = $app.querySelector("#" + subId);
+    if (valEl) {
+      valEl.textContent = valText;
+      valEl.className = "ap-metric-value" + (tone ? " ap-tone-" + tone : "");
+    }
+    if (subEl) subEl.textContent = subText;
+  };
+
+  if (ap.policy_present) {
+    const v4 = num(ap.usable_v4);
+    const v6 = num(ap.usable_v6);
+    const ispGood = num(ap.isp_good);
+    const ispDead = num(ap.isp_dead);
+    const gGood = num(ap.google_good);
+    const gByp = num(ap.google_bypassable);
+    const gBad = num(ap.google_unbypassable) + num(ap.google_dead);
+    const play = num(ap.play_count);
+    const pfx = num(ap.prefixes_total);
+    const ips = num(ap.ips_total);
+    const qok = num(ap.quic_ok_count);
+    const obs = num(ap.observed_count);
+
+    setMetric(
+      "ap-caches-val",
+      "ap-caches-sub",
+      `${v4} IPv4 · ${v6} IPv6 рабочих`,
+      `ISP GGC: ${ispGood} раб. / ${ispDead} отсеяно · Google: ${gGood} чист. / ${gByp} обход. / ${gBad} недост.` +
+        ` · Play: ${play} (преф. ${pfx}, IP ${ips})`,
+      (v4 + v6 >= 1) ? "good" : "bad"
+    );
+
+    const ytQuicMode = normalizeOverrideVal("yt_quic_off", t.yt_quic_off, apOn);
+    const allQuicMode = normalizeOverrideVal("quic_off", t.quic_off, apOn);
+    let quicTitle;
+    let quicTone = "";
+    if (allQuicMode === "1") {
+      quicTitle = "Весь QUIC → TCP (вручную)";
+      quicTone = "warn";
+    } else if (ap.global_quic_blocked && allQuicMode !== "off") {
+      quicTitle = "Сеть режет QUIC → TCP";
+      quicTone = "warn";
+    } else if (qok > 0) {
+      quicTitle = `HTTP/3 2/2: ${qok} узл.`;
+      quicTone = "good";
+    } else {
+      quicTitle = "HTTP/3 2/2: нет рабочих";
+      quicTone = "muted";
+    }
+    const ytQuicHint = ytQuicMode === "1"
+      ? "YouTube QUIC: отказ (Вкл)"
+      : ytQuicMode === "off"
+        ? "YouTube QUIC: не трогать (Выкл)"
+        : `YouTube QUIC 2/2: ${qok} из ${ips}`;
+    const allQuicHint = allQuicMode === "off"
+      ? "глобальный отказ отключён"
+      : (ap.global_quic_blocked ? "выявлен общий блок QUIC" : "общего блока нет");
+    setMetric("ap-quic-val", "ap-quic-sub", quicTitle, `${ytQuicHint} · ${allQuicHint}`, quicTone);
+
+    const brtt = num(ap.baseline_rtt_ms);
+    const grtt = num(ap.ggc_rtt_ms);
+    const resyn = num(ap.resyn_delay_ms);
+    const giveup = num(ap.preflight_giveup_ms);
+    const stall = num(ap.ggc_stall_guard_ms);
+    const sni = ap.preflight_sni ? String(ap.preflight_sni) : "—";
+    setMetric(
+      "ap-rtt-val",
+      "ap-rtt-sub",
+      `База ${brtt} мс · GGC ${grtt} мс`,
+      `reSYN ${resyn} мс · giveup ${giveup} мс · stall ${stall} мс · SNI: ${sni}` +
+        (obs > 0 ? ` · DoH/DoT: ${obs}` : ""),
+      ""
+    );
+
+    const timeStr = formatApTime(ap.updated);
+    const fuseVal = ap.stale
+      ? "Устарело (fail-open)"
+      : ap.safety_fuse_ok
+        ? "Активен"
+        : "Fail-open";
+    const fuseTone = ap.stale ? "warn" : (ap.safety_fuse_ok ? "good" : "warn");
+    const fuseSub = (ap.safety_fuse_ok
+      ? `Рабочих кэшей ${v4 + v6} ≥ 1 — отсев и защита включены`
+      : "Рабочих кэшей < 1 — активный сброс отключён во избежание обрыва") +
+      (timeStr ? ` · обновлено ${timeStr}` : "");
+    setMetric("ap-fuse-val", "ap-fuse-sub", fuseVal, fuseSub, fuseTone);
+  } else {
+    const obs = num(ap.observed_count);
+    setMetric(
+      "ap-caches-val",
+      "ap-caches-sub",
+      "Нет замеров",
+      !gvsubEnabled
+        ? "Служба замеров gvsub отключена (Z2K_GV_SERVER_REPLY2=0). Переключите «Автопилот видео YouTube» выкл → вкл, чтобы запустить замеры."
+        : ap.gvsub_present
+          ? "Служба gvsub запущена — ждём первых обращений к YouTube."
+          : "Файл политики появится после запуска обхода и DNS-запросов YouTube.",
+      !gvsubEnabled ? "warn" : "muted"
+    );
+    setMetric("ap-quic-val", "ap-quic-sub", "Не проверен", "Данные о прохождении HTTP/3 ещё не собраны.", "muted");
+    setMetric(
+      "ap-rtt-val",
+      "ap-rtt-sub",
+      "Ожидает калибровки",
+      obs > 0 ? `DoH/DoT наблюдений: ${obs}` : "Замеры задержек появятся после первых обращений.",
+      "muted"
+    );
+    setMetric(
+      "ap-fuse-val",
+      "ap-fuse-sub",
+      "Ожидание (fail-open)",
+      "Пока нет политики, автопилот не вмешивается в соединения.",
+      "muted"
+    );
+  }
+
+  syncAutopilotModeControls(apOn);
+  AP_OVERRIDE_DEFS.forEach(o => {
+    const sel = $app.querySelector(`#ap-sel-${o.key}`);
+    if (!sel) return;
+    const norm = normalizeOverrideVal(o.key, t[o.key], apOn);
+    sel.value = norm;
+    sel.dataset.saved = norm;
+    setLockAware(sel, o.video ? !ytOn : false);
+    const row = sel.closest(".ap-override-row");
+    const note = row ? row.querySelector(".yt-off-note") : null;
+    if (note) note.hidden = !o.video || ytOn;
+  });
+}
+
 // Без категории YouTube профилей YouTube нет, и включённый тумблер обещал бы
 // то, чего не происходит. Само значение при этом хранится и вернётся вместе с ней.
 function syncGvPreflight(youtubeOn) {
+  const ytNote = $app.querySelector("#ap-yt-off-note");
+  if (ytNote) ytNote.hidden = youtubeOn;
+  const masterBox = $app.querySelector("#ap-master-switch");
+  if (masterBox) syncAutopilotBadge(youtubeOn, masterBox.checked);
   for (const key of ["gv_preflight", "yt_quic_off"]) {
-    const row = $app.querySelector(`[data-key="${key}"]`);
-    if (!row) continue;
-    setLockAware(row.querySelector("input"), !youtubeOn);
-    const note = row.querySelector(".yt-off-note");
+    const sel = $app.querySelector(`#ap-sel-${key}`);
+    if (sel) setLockAware(sel, !youtubeOn);
+    const row = $app.querySelector(`.toggle-row[data-key="${key}"]`);
+    const note = row ? row.querySelector(".yt-off-note") : null;
     if (note) note.hidden = youtubeOn;
   }
 }
@@ -223,12 +500,10 @@ export async function renderToggles() {
       <p class="desc">Изменение кратковременно перезапускает работающий обход.</p>
       ${toggleRows(TOGGLE_DEFS.filter(t => t.category))}
     </div>
-    <div class="card card-compact">
-      ${toggleRows(TOGGLE_DEFS.filter(t => t.video))}
-    </div>
+    ${renderAutopilotCard()}
     <div class="card">
       <h3>Другие настройки</h3>
-      ${toggleRows(TOGGLE_DEFS.filter(t => !t.category && !t.video))}
+      ${toggleRows(TOGGLE_DEFS.filter(t => !t.category))}
     </div>
     <div class="card" id="panel-session-ttl-card">
       <h3>Срок входа в веб-панель</h3>
@@ -358,6 +633,8 @@ export async function renderToggles() {
         const row = $app.querySelector(`[data-key="${t.key}"]`);
         if (row) setLockAware(row.querySelector("input"), true);
       });
+      setLockAware($app.querySelector("#ap-master-switch"), true);
+      $app.querySelectorAll("[data-override]").forEach(sel => setLockAware(sel, true));
       setLockAware($app.querySelector("#tg-enable"), true);
       setLockAware($app.querySelector("#tg-disable"), true);
       // Селектор времени — тот же класс: не зная состояния, панель не знает
@@ -379,13 +656,23 @@ export async function renderToggles() {
       return;
     }
     if (_stale("toggles", seq)) return;
+    applyTogglesStatus(s);
+  }
+
+  function applyTogglesStatus(s) {
     // /status мог вернуться уже после ухода со страницы: $app очищен, ни
     // одного из этих элементов больше нет, и обращение к badge.hidden роняло
     // весь остаток renderToggles — вместе с привязкой кнопок туннеля,
     // секцией политики и глобальным локом.
     const badge = $app.querySelector("#tg-state-badge");
     if (!badge) return;
+    if (!s || !s.toggles) return;
     if (errBox) { errBox.hidden = true; errBox.innerHTML = ""; }
+    const onApplyRefresh = (nextStatus) => {
+      if (!onTogglesPage()) return;
+      if (nextStatus) applyTogglesStatus(nextStatus);
+      else loadTogglesState();
+    };
     // Чекбокс автообновления ловим здесь же: строка с временем ходит за ним,
     // и искать его вторым, другим селектором — способ однажды поехать врозь.
     let auBox = null;
@@ -405,12 +692,24 @@ export async function renderToggles() {
           // джоба: ответ придёт через десяток секунд, а тумблер уже стоит
           // в новом положении — расхождение выглядело бы как залипание.
           if (t.key === "auto_update") auHourSync(box);
-          toggleClick(t.key, box);
+          toggleClick(t.key, box, t.key === "category_youtube" ? onApplyRefresh : null);
         });
       }
     });
+    const masterBox = $app.querySelector("#ap-master-switch");
+    if (masterBox && !masterBox.dataset.wired) {
+      masterBox.dataset.wired = "1";
+      masterBox.addEventListener("change", () => toggleClick("yt_autopilot", masterBox, onApplyRefresh));
+    }
+    AP_OVERRIDE_DEFS.forEach(o => {
+      const sel = $app.querySelector(`#ap-sel-${o.key}`);
+      if (!sel || sel.dataset.wired) return;
+      sel.dataset.wired = "1";
+      sel.addEventListener("change", () => overrideSelectChange(o.key, sel, onApplyRefresh));
+    });
+    updateAutopilotCard(s);
     wireAuHour(s.toggles && s.toggles.au_hour, auBox);
-    syncGvPreflight(s.toggles.category_youtube === "1");
+    syncGvPreflight(Boolean(s.toggles && s.toggles.category_youtube === "1"));
     // TG-tunnel state pill + button enable/disable matching reality.
     const tgRunning = s.tunnel && s.tunnel.running === true;
     badge.hidden = false;
@@ -489,6 +788,13 @@ export async function renderToggles() {
   $app.querySelector("#tg-disable").addEventListener("click", () => tgAction("disable", "Остановка Telegram туннеля"));
 
   const searchInput = $app.querySelector("#toggles-search");
+  const apDebug = $app.querySelector("#ap-debug");
+  let apSearchLock = false;
+  if (apDebug) {
+    apDebug.addEventListener("toggle", () => {
+      if (!apSearchLock) apDebug.dataset.userOpen = apDebug.open ? "1" : "0";
+    });
+  }
   if (searchInput) {
     searchInput.addEventListener("input", () => {
       const q = searchInput.value.trim().toLowerCase();
@@ -496,6 +802,12 @@ export async function renderToggles() {
         const text = (row.textContent || "").toLowerCase();
         row.hidden = q.length > 0 && !text.includes(q);
       });
+      if (apDebug) {
+        const hasHit = q.length > 0 && Array.from(apDebug.querySelectorAll(".ap-override-row[data-key]")).some(r => !r.hidden);
+        apSearchLock = true;
+        apDebug.open = q.length > 0 ? hasHit : apDebug.dataset.userOpen === "1";
+        apSearchLock = false;
+      }
     });
   }
 
@@ -616,9 +928,78 @@ export async function renderToggles() {
   _updateGlobalUILock();
 }
 
-async function toggleClick(key, box) {
+async function overrideSelectChange(key, sel, onReload) {
+  const val = sel.value;
+  const prev = sel.dataset.saved || "auto";
+  if (val === prev) return;
+  sel.disabled = true;
+  const restarts = TOGGLES_RESTART_SERVICE[key] === 1;
+  const labels = {
+    gv_preflight: "обход по ответу сервера",
+    yt_quic_off: "YouTube без QUIC",
+    quic_off: "весь QUIC через TCP",
+  };
+  const verbs = {
+    auto: "Перевожу в Авто:",
+    1: "Принудительно включаю",
+    off: "Принудительно отключаю",
+  };
+  const doneTexts = {
+    auto: "Режим: Авто",
+    1: "Принудительно включено",
+    off: "Принудительно выключено",
+  };
+  let resp;
+  try {
+    resp = await apiPost("/toggle/" + TOGGLE_API_NAME[key], { value: val });
+  } catch (e) {
+    sel.value = prev;
+    setLockAware(sel, false);
+    toastErr("Ошибка: ", e);
+    return;
+  }
+  // Снимаем локальный disable до openJobModal (как в tgAction): иначе
+  // _updateGlobalUILock запомнит disabled=true в lockBackup и оставит селектор
+  // заблокированным на время async awaitPanelBack() при обрыве связи.
+  setLockAware(sel, false);
+  openJobModal((verbs[val] || "Переключаю") + " " + (labels[key] || key), resp.job, {
+    tolerateOutage: restarts,
+    onDone: async (d) => {
+      const outcome = jobOutcome(d);
+      if (outcome === JOB_FAIL) {
+        sel.value = prev;
+        toast("Не получилось — вернул как было", "bad");
+      } else if (jobUnresolved(outcome)) {
+        const m = unresolvedMsg(outcome);
+        if (m) toast(m, "bad");
+        const s = await awaitPanelBack();
+        if (!sel.isConnected) return;
+        if (s && !_activeJobs.size) {
+          toast("Связь с панелью восстановлена — состояние обновлено");
+          refreshStatus();
+          if (onReload) onReload(s);
+        }
+      } else {
+        sel.dataset.saved = val;
+        toast(doneTexts[val] || "Сохранено");
+      }
+      if (!sel.isConnected) return;
+      const ytBox = $app.querySelector('[data-key="category_youtube"] input');
+      const ytLocked = (key === "gv_preflight" || key === "yt_quic_off") && ytBox && !ytBox.checked;
+      setLockAware(sel, !!ytLocked);
+      if (restarts && !jobUnresolved(outcome)) {
+        setTimeout(() => {
+          refreshStatus();
+          if (onReload) onReload();
+        }, 500);
+      }
+    },
+  });
+}
+
+async function toggleClick(key, box, onApplied) {
   const sw = box.closest(".switch");
-  const wanted = box.checked ? "1" : "0";
+  const wanted = key === "yt_autopilot" ? (box.checked ? "auto" : "0") : (box.checked ? "1" : "0");
   if (key === "autohostlist" && wanted === "1") {
     // Тумблер блокируем на время вопроса. Подложка модалки перехватывает
     // мышь, но не клавиатуру: без этого Tab уводил фокус из модалки обратно
@@ -642,11 +1023,12 @@ async function toggleClick(key, box) {
   sw.classList.add("loading");
   box.disabled = true; // блок UI до завершения, не даём кликать ещё
   const restarts = TOGGLES_RESTART_SERVICE[key] === 1;
-  const verb = wanted === "1" ? "Включаю" : "Отключаю";
+  const verb = wanted === "0" ? "Отключаю" : "Включаю";
   const niceName = {
     category_youtube: "YouTube",
     category_rkn: "RKN",
     category_discord_voice: "Discord Voice / STUN",
+    yt_autopilot: "автопилот видео YouTube",
     gv_preflight: "обход по ответу сервера для видео YouTube",
     yt_quic_off: "YouTube без QUIC",
     quic_off: "весь QUIC через TCP",
@@ -689,15 +1071,26 @@ async function toggleClick(key, box) {
         // трогаем чекбокс и не обещаем, что вернули как было.
         const m = unresolvedMsg(outcome);
         if (m) toast(m, "bad");
-        resyncToggle(key, box);
+        resyncToggle(key, box, onApplied);
       } else {
-        toast(wanted === "1" ? "Включено" : "Выключено");
+        toast(wanted === "0" ? "Выключено" : "Включено");
       }
       // Чекбокс мог вернуться в прежнее положение (провал или resync) —
       // строка с временем обязана поехать за ним.
       if (key === "auto_update") auHourSync(box);
       if (key === "category_youtube") syncGvPreflight(box.checked);
-      if (restarts && !jobUnresolved(outcome)) setTimeout(refreshStatus, 500);
+      if (key === "yt_autopilot" && !jobUnresolved(outcome)) {
+        const ytBox = $app.querySelector('[data-key="category_youtube"] input');
+        const ytOn = ytBox ? ytBox.checked : true;
+        syncAutopilotBadge(ytOn, box.checked, (outcome !== JOB_FAIL && box.checked) ? true : undefined);
+        syncAutopilotModeControls(box.checked);
+      }
+      if (restarts && !jobUnresolved(outcome)) {
+        setTimeout(() => {
+          refreshStatus();
+          if (onApplied) onApplied();
+        }, 500);
+      }
     },
   });
 }

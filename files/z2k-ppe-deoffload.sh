@@ -60,7 +60,12 @@
 # в zport_tcp: замер 2026-08-28, в отладке нет ни одной строки про 5222.
 PPE_PORTS="${PPE_PORTS:-80,443,2053,2083,2087,2096,5222,8443}"
 PPE_QUIC_PORT="${PPE_QUIC_PORT:-443}"       # QUIC UDP port — de-offload its handshake window too
-PPE_CONNSKIP="${PPE_CONNSKIP:-30}"          # first-N packets kept on CPU (handshake window)
+# connskip считает ОБА направления (original + reply). На 2-пакетном PQ ClientHello +
+# 8-way multidisorder + 8 dup-ACK + 4 сегментах ServerHello + ClientFinished + 10-КБ SABR
+# POST /videoplayback + server 200 OK поток достигает 34..48 пакетов до завершения первого
+# запроса; окно 60 держит полный цикл запроса и ответа на CPU (вместе с NFQWS2_TCP_PKT_OUT=45),
+# переводя дальнейший видеопоток в аппаратный PPE с 61-го пакета.
+PPE_CONNSKIP="${PPE_CONNSKIP:-60}"          # first-N bidir packets kept on CPU (handshake+1st req window)
 PPE_TARGET="${PPE_TARGET:-PPE}"             # firmware per-flow offload-skip target (ppe_tg)
 PPE_CONFIG_FILE="${PPE_CONFIG_FILE:-/opt/zapret2/config}"
 
@@ -78,10 +83,13 @@ PPE_LEGACY_MARK="${PPE_LEGACY_MARK:-/opt/zapret2/.z2k-ppe-legacy-purged}"
 _z2k_ppe_purge_legacy_game() {
     [ -f "$PPE_LEGACY_MARK" ] && return 0
     local a="-p udp -m multiport --dports 1024:2407,2409:65535 -m connskip --connskip $PPE_CONNSKIP -j $PPE_TARGET"
+    local a30="-p udp -m multiport --dports 1024:2407,2409:65535 -m connskip --connskip 30 -j $PPE_TARGET"
     local ch
     for ch in PREROUTING FORWARD; do
-        while _z2k_ppe_ipt  -t mangle -C "$ch" $a; do _z2k_ppe_ipt  -t mangle -D "$ch" $a || break; done
-        while _z2k_ppe_ipt6 -t mangle -C "$ch" $a; do _z2k_ppe_ipt6 -t mangle -D "$ch" $a || break; done
+        while _z2k_ppe_ipt  -t mangle -C "$ch" $a;   do _z2k_ppe_ipt  -t mangle -D "$ch" $a   || break; done
+        while _z2k_ppe_ipt6 -t mangle -C "$ch" $a;   do _z2k_ppe_ipt6 -t mangle -D "$ch" $a   || break; done
+        while _z2k_ppe_ipt  -t mangle -C "$ch" $a30; do _z2k_ppe_ipt  -t mangle -D "$ch" $a30 || break; done
+        while _z2k_ppe_ipt6 -t mangle -C "$ch" $a30; do _z2k_ppe_ipt6 -t mangle -D "$ch" $a30 || break; done
     done
     # `touch`, NOT `: > file`: `:` is a POSIX SPECIAL built-in, and a redirection error on a
     # special built-in makes the shell EXIT outright — dash and busybox ash both do it, so a
@@ -89,6 +97,28 @@ _z2k_ppe_purge_legacy_game() {
     # failure mode here) would kill the whole script mid-run, and neither `2>/dev/null` nor
     # `|| true` can catch it because the shell is already gone. touch is an ordinary command.
     touch "$PPE_LEGACY_MARK" 2>/dev/null || true
+    return 0
+}
+
+# One-shot migration from connskip=30 -> connskip=60 (живой замер 24.11.2026):
+# снимаем осиротевшие правила --connskip 30 в PREROUTING/FORWARD (v4/v6), чтобы
+# они не перехватывали сопоставление в PPE раньше нового порога 60.
+PPE_CONNSKIP30_MARK="${PPE_CONNSKIP30_MARK:-/tmp/.z2k-ppe-connskip30-purged}"
+_z2k_ppe_purge_legacy_connskip30() {
+    [ "$PPE_CONNSKIP" = "30" ] && return 0
+    [ -f "$PPE_CONNSKIP30_MARK" ] && return 0
+    local t30="-p tcp -m multiport --dports $PPE_PORTS -m connskip --connskip 30 -j $PPE_TARGET"
+    local u30="-p udp --dport $PPE_QUIC_PORT -m connskip --connskip 30 -j $PPE_TARGET"
+    local ch _r
+    for ch in PREROUTING FORWARD; do
+        for _r in "$t30" "$u30"; do
+            while _z2k_ppe_ipt -t mangle -C "$ch" $_r; do _z2k_ppe_ipt -t mangle -D "$ch" $_r || break; done
+            if z2k_ppe_v6_ok; then
+                while _z2k_ppe_ipt6 -t mangle -C "$ch" $_r; do _z2k_ppe_ipt6 -t mangle -D "$ch" $_r || break; done
+            fi
+        done
+    done
+    touch "$PPE_CONNSKIP30_MARK" 2>/dev/null || true
     return 0
 }
 
@@ -148,6 +178,7 @@ z2k_ppe_ensure_rules() {
     # exist either, so the purge has nothing to do and shouldn't burn syscalls looking.
     z2k_ppe_available || return 1
     _z2k_ppe_purge_legacy_game
+    _z2k_ppe_purge_legacy_connskip30
     z2k_ppe_rule_present_pre4 || _z2k_ppe_ipt -t mangle -I PREROUTING $_z2k_ppe_args
     z2k_ppe_rule_present_fwd4 || _z2k_ppe_ipt -t mangle -I FORWARD    $_z2k_ppe_args
     if z2k_ppe_v6_ok; then

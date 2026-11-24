@@ -26,6 +26,12 @@ local ICMP6_UNREACH, ICMP6_PORT_UNREACH = 1, 4
 -- Сколько исходного пакета вкладывать: RFC 1812 4.3.2.3 (ответ не длиннее 576
 -- байт) и RFC 4443 2.4(c) (не длиннее минимального MTU IPv6, 1280).
 local IP4_MAX, IP6_MAX = 576, 1280
+local ip4_id_seq = 0
+
+local function next_ip4_id()
+    ip4_id_seq = (ip4_id_seq % 65535) + 1
+    return ip4_id_seq
+end
 
 local function be16(v)
     return string.char(math.floor(v / 256) % 256, v % 256)
@@ -58,27 +64,25 @@ function z2k_quic_reject_packet(orig, src, dst, ip6)
     local body = orig:sub(1, IP4_MAX - 20 - 8)
     local icmp0 = string.char(ICMP4_UNREACH, ICMP4_PORT_UNREACH, 0, 0, 0, 0, 0, 0) .. body
     local icmp = icmp0:sub(1, 2) .. be16(inet_csum(icmp0)) .. icmp0:sub(5)
-    local hdr0 = string.char(0x45, 0) .. be16(20 + #icmp) .. string.char(0, 0, 0, 0, 64, 1, 0, 0)
+    local hdr0 = string.char(0x45, 0) .. be16(20 + #icmp) .. be16(next_ip4_id()) .. string.char(0, 0, 64, 1, 0, 0)
         .. dst .. src
     return hdr0:sub(1, 10) .. be16(inet_csum(hdr0)) .. hdr0:sub(13) .. icmp
 end
 
--- --lua-desync=z2k_quic_reject — только исходящий QUIC Initial.
-function z2k_quic_reject(ctx, desync)
-    direction_cutoff_opposite(ctx, desync, "out")
-    local dis = desync.dis
-    if not (desync.outgoing and dis and dis.udp and (dis.ip or dis.ip6)) then return end
-    if not payload_check(desync, "quic_initial") then return end
+-- Общий отправитель ICMP Port Unreachable для z2k_quic_reject и z2k_autopilot_quic.
+function z2k_quic_reject_send(ctx, desync)
+    local dis = desync and desync.dis
     -- ClientHello, собранный из нескольких пакетов, движок проигрывает по
     -- кускам: выкидываем каждый, отказ шлём один раз.
-    if replay_first(desync) then
+    if dis and replay_first(desync) then
         local ip = dis.ip6 or dis.ip
         local src = dis.ip6 and ip.ip6_src or ip.ip_src
         local dst = dis.ip6 and ip.ip6_dst or ip.ip_dst
         local ok, orig = pcall(reconstruct_dissect, dis, { keepsum = true })
         if ok and orig and src and dst then
             local pkt = z2k_quic_reject_packet(orig, src, dst, dis.ip6 ~= nil)
-            if rawsend(pkt, { ifout = desync.ifin }) then
+            local ifout = (desync.ifin and desync.ifin ~= "") and desync.ifin or nil
+            if rawsend(pkt, { ifout = ifout }) then
                 DLOG("z2k_quic_reject: port unreachable sent")
             else
                 DLOG("z2k_quic_reject: rawsend failed, silent drop")
@@ -87,5 +91,17 @@ function z2k_quic_reject(ctx, desync)
             DLOG("z2k_quic_reject: cannot rebuild original packet, silent drop")
         end
     end
+    if ctx and type(execution_plan_cancel) == "function" then
+        pcall(execution_plan_cancel, ctx)
+    end
     return VERDICT_DROP
+end
+
+-- --lua-desync=z2k_quic_reject — только исходящий QUIC Initial.
+function z2k_quic_reject(ctx, desync)
+    direction_cutoff_opposite(ctx, desync, "out")
+    local dis = desync.dis
+    if not (desync.outgoing and dis and dis.udp and (dis.ip or dis.ip6)) then return end
+    if not payload_check(desync, "quic_initial") then return end
+    return z2k_quic_reject_send(ctx, desync)
 end

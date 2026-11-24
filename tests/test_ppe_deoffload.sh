@@ -51,6 +51,8 @@ ip6tables() { _ipt v6 "$@"; }
 
 # lib config: temp config file, force the availability gates ON for shape tests
 PPE_CONFIG_FILE="$TMP/config"; : > "$PPE_CONFIG_FILE"
+PPE_LEGACY_MARK="$TMP/.z2k-ppe-legacy-purged"
+PPE_CONNSKIP30_MARK="$TMP/.z2k-ppe-connskip30-purged"
 . "$LIB"
 # override the /proc-reading gates deterministically for the shape tests
 z2k_ppe_available() { return 0; }
@@ -59,7 +61,7 @@ _Z2K_PPE_OK=1; _Z2K_PPE_V6=1
 
 # ---- constants ----
 assert_eq "ports include 443"        "1" "$(printf '%s' "$PPE_PORTS" | grep -c '443')"
-assert_eq "connskip default 30"      "30"  "$PPE_CONNSKIP"
+assert_eq "connskip default 60"      "60"  "$PPE_CONNSKIP"
 assert_eq "target is PPE"            "PPE" "$PPE_TARGET"
 
 # ---- ensure_rules shape ----
@@ -69,18 +71,35 @@ z2k_ppe_ensure_rules >/dev/null 2>&1
 # красным на ровном месте — правило-то верное. Сторожим ФОРМУ правила и то, что
 # в него ушёл ровно объявленный список.
 assert_has "v4 FORWARD multiport+connskip -j PPE" "$CALLS" \
-    "v4 .*-t mangle -I FORWARD -p tcp -m multiport --dports $PPE_PORTS -m connskip --connskip 30 -j PPE"
+    "v4 .*-t mangle -I FORWARD -p tcp -m multiport --dports $PPE_PORTS -m connskip --connskip 60 -j PPE"
 assert_has "v4 PREROUTING multiport+connskip -j PPE" "$CALLS" \
-    'v4 .*-t mangle -I PREROUTING -p tcp -m multiport --dports .* -m connskip --connskip 30 -j PPE'
+    'v4 .*-t mangle -I PREROUTING -p tcp -m multiport --dports .* -m connskip --connskip 60 -j PPE'
 assert_has "v6 FORWARD rule too (best-effort)" "$CALLS" \
-    'v6 .*-t mangle -I FORWARD -p tcp -m multiport --dports .* -j PPE'
+    'v6 .*-t mangle -I FORWARD -p tcp -m multiport --dports .* -m connskip --connskip 60 -j PPE'
 # QUIC (UDP/443) de-offload rules — default ON, same connskip window
 assert_has "v4 FORWARD udp/443 connskip -j PPE" "$CALLS" \
-    'v4 .*-t mangle -I FORWARD -p udp --dport 443 -m connskip --connskip 30 -j PPE'
+    'v4 .*-t mangle -I FORWARD -p udp --dport 443 -m connskip --connskip 60 -j PPE'
 assert_has "v4 PREROUTING udp/443 connskip -j PPE" "$CALLS" \
-    'v4 .*-t mangle -I PREROUTING -p udp --dport 443 -m connskip --connskip 30 -j PPE'
+    'v4 .*-t mangle -I PREROUTING -p udp --dport 443 -m connskip --connskip 60 -j PPE'
 assert_has "v6 udp/443 rule too (best-effort)" "$CALLS" \
-    'v6 .*-t mangle -I FORWARD -p udp --dport 443 -m connskip --connskip 30 -j PPE'
+    'v6 .*-t mangle -I FORWARD -p udp --dport 443 -m connskip --connskip 60 -j PPE'
+# One-shot migration checks & deletes legacy --connskip 30 TCP/UDP rules and writes marker
+if [ -f "$PPE_CONNSKIP30_MARK" ]; then TESTS_PASSED=$((TESTS_PASSED+1)); printf "[PASS] connskip 30 migration marker created\n"
+else TESTS_FAILED=$((TESTS_FAILED+1)); printf "[FAIL] connskip 30 migration marker missing\n"; fi
+: > "$CALLS"; rm -f "$PPE_CONNSKIP30_MARK"; REMOVE=1
+z2k_ppe_ensure_rules >/dev/null 2>&1
+unset REMOVE
+assert_has "migration deletes v4 PREROUTING tcp connskip 30" "$CALLS" \
+    'v4 .*-t mangle -D PREROUTING -p tcp -m multiport .* --connskip 30 -j PPE'
+assert_has "migration deletes v4 FORWARD udp connskip 30" "$CALLS" \
+    'v4 .*-t mangle -D FORWARD -p udp --dport 443 -m connskip --connskip 30 -j PPE'
+assert_has "migration deletes v6 PREROUTING tcp connskip 30" "$CALLS" \
+    'v6 .*-t mangle -D PREROUTING -p tcp -m multiport .* --connskip 30 -j PPE'
+# Second run with marker present skips connskip 30 checks altogether
+: > "$CALLS"; REMOVE=1
+z2k_ppe_ensure_rules >/dev/null 2>&1
+unset REMOVE
+assert_hasnt "second ensure_rules skips connskip 30 migration" "$CALLS" '--connskip 30'
 # must NOT touch nat table or global ppe_enabled (per-flow only, mangle only)
 assert_hasnt "no nat-table rule"            "$CALLS" '-t nat'
 assert_hasnt "no REDIRECT"                  "$CALLS" 'REDIRECT'

@@ -16,10 +16,16 @@ globals = {
     -- Проверка DPI отдельным соединением (files/lua/z2k-preflight.lua).
     -- Десинк-функцию движок ищет по имени в _G, а таблица состояний глобальна,
     -- потому что переживает повторную загрузку файла и бьётся юнит-тестом.
-    "z2k_preflight", "z2k_pf_flows", "z2k_preflight_syn_timer",
+    "z2k_preflight", "z2k_pf_flows", "z2k_preflight_syn_timer", "z2k_preflight_giveup_timer",
     -- Отказ QUIC (files/lua/z2k-quic-reject.lua): десинк-функцию движок ищет
     -- по имени в _G, сборку пакета бьёт напрямую юнит-тест.
-    "z2k_quic_reject", "z2k_quic_reject_packet",
+    "z2k_quic_reject", "z2k_quic_reject_packet", "z2k_quic_reject_send",
+    -- Автопилот YouTube / googlevideo / gvt1 (files/lua/z2k-gv-autopilot.lua).
+    "z2k_autopilot_quic", "z2k_autopilot_tcp_fastfail",
+    "z2k_autopilot_stall_guard", "z2k_autopilot_stall_timer", "z2k_autopilot_observe",
+    "z2k_autopilot_reset", "z2k_autopilot_set_paths", "z2k_autopilot_parse_ip", "z2k_autopilot_mask_prefix",
+    "z2k_autopilot_lookup_raw", "z2k_autopilot_lookup_dis", "z2k_autopilot_lookup_text",
+    "z2k_autopilot_safety_fuse", "z2k_autopilot_is_probe_dis",
     -- Поправки к штатному детектору неудач (files/lua/z2k-alert.lua) и
     -- детектор молчания QUIC (files/lua/z2k-quic-silence.lua). Движок ищет и
     -- детектор, и таймер-функцию по имени в _G.
@@ -35,6 +41,7 @@ globals = {
     "cond_tcp_has_ts",
     "automate_host_record",
     "circular_report_failure",
+    "circular_rotate",
     "circular",
     -- Сброс накопленных счётчиков удач/неудач хоста. Предусмотрен движком
     -- ровно для нашего случая: состояние ротации меняет не детектор, а человек
@@ -109,9 +116,10 @@ read_globals = {
     -- Отмена инстансов дальше по профилю на время пробы (nfqws2 core).
     "execution_plan_cancel",
 
-    -- nfqws2 detectors
+    -- nfqws2 detectors and circular generation helpers (zapret-auto.lua)
     "standard_failure_detector",
     "standard_success_detector",
+    "circular_sync_generation",
 
     -- zapret-antidpi.lua desync primitives (defined upstream, used by
     -- z2k-dynamic-strategy.lua dispatch table)
@@ -126,8 +134,9 @@ read_globals = {
     "sld_hostkey",
     "tld_hostkey",
 
-    -- nfqws2 time
+    -- nfqws2 time / addr helpers
     "clock_getfloattime",
+    "ntop",
 
     -- nfqws2 constants
     "VERDICT_DROP",

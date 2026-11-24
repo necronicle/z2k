@@ -872,6 +872,139 @@ print_tcp16() {
     fi
 }
 
+print_youtube_autopilot() {
+    printf '\n=== Автопилот видео YouTube ===\n'
+    local cfg="${ZAPRET2_DIR}/config"
+    local lua="${ZAPRET2_DIR}/lua/z2k-gv-autopilot.lua"
+    local pol_file="${Z2K_GV_POLICY_FILE:-/tmp/z2k-gv-policy.dat}"
+    local obs_file="${Z2K_GV_OBSERVED_FILE:-/tmp/z2k-gv-observed.tsv}"
+
+    _ap_flag() {
+        local v=""
+        v=$(sed -n "s/^${1}=//p" "$cfg" 2>/dev/null | tail -n 1 | tr -d "\"' ")
+        [ -n "$v" ] || v="$2"
+        printf '%s' "$v"
+    }
+
+    local f_ap f_sr2 f_pm f_yq f_aq
+    f_ap=$(_ap_flag "Z2K_YT_AUTOPILOT" "auto")
+    f_sr2=$(_ap_flag "Z2K_GV_SERVER_REPLY2" "1")
+    f_pm=$(_ap_flag "Z2K_GV_PREFLIGHT_MODE" "auto")
+    f_yq=$(_ap_flag "Z2K_YT_QUIC_OFF" "0")
+    f_aq=$(_ap_flag "Z2K_QUIC_OFF" "0")
+    printf 'флаги             : autopilot=%s server_reply2=%s preflight_mode=%s yt_quic_off=%s quic_off=%s\n' \
+        "$f_ap" "$f_sr2" "$f_pm" "$f_yq" "$f_aq"
+    if [ "$(_ap_flag "Z2K_CATEGORY_YOUTUBE" "1")" = "0" ]; then
+        printf 'категория YouTube : выключена (Z2K_CATEGORY_YOUTUBE=0)\n'
+    elif [ "$f_ap" != "0" ] && [ "$f_sr2" = "0" ]; then
+        printf 'предупреждение    : gvsub отключён (Z2K_GV_SERVER_REPLY2=0) — автопилот работает без замеров и policy.dat\n'
+    fi
+
+    if [ -f "$lua" ]; then
+        printf 'модуль Lua        : есть\n'
+    else
+        printf 'модуль Lua        : ФАЙЛА НЕТ (%s)\n' "$lua"
+    fi
+
+    local in_q="нет" in_ff="нет" in_sg="нет" in_ob="нет"
+    grep -qE -- '--lua-desync=z2k_autopilot_quic(:|[[:space:]]|$)' "$cfg" 2>/dev/null && in_q="да"
+    grep -qE -- '--lua-desync=z2k_autopilot_tcp_fastfail(:|[[:space:]]|$)' "$cfg" 2>/dev/null && in_ff="да"
+    grep -qE -- '--lua-desync=z2k_autopilot_stall_guard(:|[[:space:]]|$)' "$cfg" 2>/dev/null && in_sg="да"
+    grep -qE -- '--lua-desync=z2k_autopilot_observe(:|[[:space:]]|$)' "$cfg" 2>/dev/null && in_ob="да"
+    printf 'в конфиге         : quic=%s fastfail=%s stall_guard=%s observe=%s\n' \
+        "$in_q" "$in_ff" "$in_sg" "$in_ob"
+
+    local obs_cnt=0
+    if [ -s "$obs_file" ]; then
+        obs_cnt=$(awk 'NF && $1 !~ /^#/ { c++ } END { printf "%.0f", c + 0 }' "$obs_file" 2>/dev/null || echo 0)
+    fi
+    printf 'наблюдения DoH/DoT: %s (%s)\n' "${obs_cnt:-0}" "$obs_file"
+
+    if [ ! -s "$pol_file" ]; then
+        printf 'политика          : отсутствует (%s)\n' "$pol_file"
+        return 0
+    fi
+
+    awk -F'\t' -v pol_path="$pol_file" '
+        function num(v) {
+            if (v ~ /^[0-9]+$/ && length(v) <= 12) return v + 0
+            return 0
+        }
+        function tally(arr, k, ver, qok) {
+            arr["total"]++
+            if (num(qok) > 0) arr["quic_ok"]++
+            if (k == "isp") {
+                if (ver == "good_ggc" || ver == "good_direct") arr["isp_good"]++
+                else if (ver == "bad_bypassable" || ver == "bad_unbypassable") arr["isp_bad"]++
+                else if (ver == "dead_l3" || ver == "dead_ggc") arr["isp_dead"]++
+            } else if (k == "google") {
+                if (ver == "good_direct" || ver == "good_ggc") arr["g_good"]++
+                else if (ver == "bad_bypassable") arr["g_byp"]++
+                else if (ver == "bad_unbypassable") arr["g_unbyp"]++
+                else if (ver == "dead_l3" || ver == "dead_ggc") arr["g_dead"]++
+            } else if (k == "play") {
+                arr["play"]++
+            } else {
+                arr["other"]++
+            }
+        }
+        {
+            for (k in f) delete f[k]
+            for (i = 1; i <= NF; i++) {
+                eq = index($i, "=")
+                if (eq > 0) {
+                    k = substr($i, 1, eq - 1)
+                    v = substr($i, eq + 1)
+                    f[k] = v
+                }
+            }
+            if (f["type"] == "header") {
+                hdr = 1
+                upd = num(f["updated"])
+                stale = (num(f["stale"]) > 0 ? 1 : 0)
+                v4 = num(f["usable_v4"])
+                v6 = num(f["usable_v6"])
+                brtt = num(f["baseline_rtt_ms"])
+                grtt = num(f["ggc_rtt_ms"])
+                gqb = (num(f["global_quic_blocked"]) > 0 ? 1 : 0)
+                resyn = num(f["resyn_delay_ms"])
+                giveup = num(f["preflight_giveup_ms"])
+                stall = num(f["ggc_stall_guard_ms"])
+                sni = f["preflight_sni"]
+            } else if (f["type"] == "prefix") {
+                tally(pfx, f["kind"], f["verdict"], f["quic_ok"])
+            } else if (f["type"] == "ip") {
+                tally(ips, f["kind"], f["verdict"], f["quic_ok"])
+            }
+        }
+        END {
+            if (!hdr) {
+                printf "политика          : нет заголовка (%s)\n", pol_path
+                exit 0
+            }
+            printf "политика          : %s (updated=%.0f, stale=%s)\n", pol_path, upd, (stale ? "да" : "нет")
+            printf "рабочие кэши      : IPv4=%d, IPv6=%d\n", v4, v6
+            if (v4 + v6 >= 1)
+                printf "Safety Fuse       : АКТИВЕН (%d >= 1)\n", v4 + v6
+            else
+                printf "Safety Fuse       : FAIL-OPEN (%d < 1 — активный сброс отключён)\n", v4 + v6
+            printf "глобальный QUIC   : %s (global_quic_blocked=%d)\n", (gqb ? "РЕЖЕТСЯ -> TCP" : "открыт"), gqb
+            printf "самокалибровка    : baseline_rtt=%dмс, ggc_rtt=%dмс, preflight_sni=%s\n", \
+                brtt, grtt, (sni != "" ? sni : "-")
+            printf "тайминги          : resyn_delay=%dмс, giveup=%dмс, stall_guard=%dмс\n", \
+                resyn, giveup, stall
+            printf "префиксы (%d)     : isp[good=%d bad=%d dead=%d] google[good=%d byp=%d unbyp=%d dead=%d] play=%d quic_ok=%d\n", \
+                pfx["total"]+0, pfx["isp_good"]+0, pfx["isp_bad"]+0, pfx["isp_dead"]+0, \
+                pfx["g_good"]+0, pfx["g_byp"]+0, pfx["g_unbyp"]+0, pfx["g_dead"]+0, \
+                pfx["play"]+0, pfx["quic_ok"]+0
+            printf "адреса (%d)       : isp[good=%d bad=%d dead=%d] google[good=%d byp=%d unbyp=%d dead=%d] play=%d quic_ok=%d\n", \
+                ips["total"]+0, ips["isp_good"]+0, ips["isp_bad"]+0, ips["isp_dead"]+0, \
+                ips["g_good"]+0, ips["g_byp"]+0, ips["g_unbyp"]+0, ips["g_dead"]+0, \
+                ips["play"]+0, ips["quic_ok"]+0
+        }
+    ' "$pol_file" 2>/dev/null
+}
+
 # Видео YouTube: обход по ответу сервера (googlevideo). Три звена, и каждое ломает
 # механизм молча: выключатель, инстанс в профиле и правило NAT для повторного
 # SYN. Печатаем все три: расхождение между ними — сразу диагноз, а не повод
@@ -880,10 +1013,20 @@ print_preflight() {
     printf '\n=== видео YouTube: обход по ответу сервера (googlevideo) ===\n'
     local cfg="${ZAPRET2_DIR}/config"
     local lua="${ZAPRET2_DIR}/lua/z2k-preflight.lua"
-    local flag; flag=$(sed -n 's/^Z2K_GV_SERVER_REPLY2=//p' "$cfg" 2>/dev/null | tail -n 1 | tr -d "\"' ")
+    local flag pf_mode
+    flag=$(sed -n 's/^Z2K_GV_SERVER_REPLY2=//p' "$cfg" 2>/dev/null | tail -n 1 | tr -d "\"' ")
+    pf_mode=$(sed -n 's/^Z2K_GV_PREFLIGHT_MODE=//p' "$cfg" 2>/dev/null | tail -n 1 | tr -d "\"' ")
     case "$flag" in
         0) printf 'выключатель       : ВЫКЛЮЧЕН (Z2K_GV_SERVER_REPLY2=0)\n' ;;
-        1) printf 'выключатель       : включён\n' ;;
+        1)
+            if [ "$pf_mode" = "off" ]; then
+                printf 'выключатель       : проба отключена (Z2K_GV_PREFLIGHT_MODE=off, gvsub активен)\n'
+            elif [ "$pf_mode" = "1" ]; then
+                printf 'выключатель       : принудительно включён (Z2K_GV_PREFLIGHT_MODE=1)\n'
+            else
+                printf 'выключатель       : включён\n'
+            fi
+            ;;
         *) printf 'выключатель       : ключа нет — по умолчанию включён\n' ;;
     esac
     if [ -f "$lua" ]; then
@@ -906,7 +1049,7 @@ print_preflight() {
         printf 'вердикт           : РАСХОЖДЕНИЕ — шаг в конфиге есть, а правила NAT нет.\n'
         printf '                    Повторный SYN уйдёт с локальным адресом, и видео\n'
         printf '                    встанет. Лечится перезапуском службы.\n'
-    elif [ "$flag" != "0" ] && [ "$in_cfg" = "0" ] && [ -f "$lua" ]; then
+    elif [ "$flag" != "0" ] && [ "$pf_mode" != "off" ] && [ "$in_cfg" = "0" ] && [ -f "$lua" ]; then
         printf 'вердикт           : РАСХОЖДЕНИЕ — файл есть и выключатель включён,\n'
         printf '                    а шага в конфиге нет: конфиг собран раньше файла.\n'
         printf '                    Лечится пересборкой конфига и перезапуском службы.\n'
@@ -2093,6 +2236,7 @@ case "$MODE" in
         print_tunnel
         print_warp
         print_tcp16
+        print_youtube_autopilot
         print_preflight
         print_gvsub
         print_rotator

@@ -101,7 +101,7 @@ generate_nfqws2_opt_from_strategies() {
     # branch ниже) теперь default. Юзеры могут опционально включить
     # merge через `Z2K_REFACTOR_PHASE3=1` в config — оставлено для
     # тестирования / возможного rollforward.
-    Z2K_REFACTOR_PHASE3=$(safe_config_read "Z2K_REFACTOR_PHASE3" "/opt/zapret2/config" "0")
+    Z2K_REFACTOR_PHASE3=$(safe_config_read "Z2K_REFACTOR_PHASE3" "${ZAPRET2_DIR:-/opt/zapret2}/config" "0")
     # Phase 4 (cdn_tls) удалён 2026-04-27 — отдельный CF/OVH/Hetzner/DO
     # профиль перехватывал non-RKN CF трафик и применял свой набор стратегий
     # слабее проверенного 47-стратегий rkn_tcp rotator'а. CF возвращается
@@ -1568,17 +1568,15 @@ generate_nfqws2_opt_from_strategies() {
     # --out-range: своего окна перехвата (a/a — весь поток) ему нужно ровно на
     # время пробы, а дальше идут родные диапазоны пула, и ротатор с плечами
     # получает их неизменными.
-    inject_z2k_preflight() {
-        local _t _out="" _done=0
-        # Выключатель или отсутствующий файл: строка профиля остаётся ровно
-        # такой, какой была до появления шага.
-        [ -n "$Z2K_PREFLIGHT_STEP" ] || { printf '%s' "$1"; return 0; }
+    inject_z2k_step() {
+        local _t _out="" _done=0 _step="$2"
+        [ -n "$_step" ] || { printf '%s' "$1"; return 0; }
         set -f
         for _t in $1; do
             if [ "$_done" = "0" ]; then
                 case "$_t" in
                     --in-range=*|--out-range=*|--payload=*|--lua-desync=*)
-                        _out="${_out:+$_out }$Z2K_PREFLIGHT_STEP"
+                        _out="${_out:+$_out }$_step"
                         _done=1
                         ;;
                 esac
@@ -1586,33 +1584,60 @@ generate_nfqws2_opt_from_strategies() {
             _out="${_out:+$_out }$_t"
         done
         set +f
-        # Профиль без единого позиционного аргумента: шаг всё равно обязан
-        # попасть в строку, иначе выключатель включён, а механизма нет.
-        [ "$_done" = "1" ] || _out="${_out:+$_out }$Z2K_PREFLIGHT_STEP"
+        [ "$_done" = "1" ] || _out="${_out:+$_out }$_step"
         printf '%s' "$_out"
     }
-    local Z2K_GV_SERVER_REPLY2 Z2K_PREFLIGHT_STEP=""
+    inject_z2k_preflight() {
+        inject_z2k_step "$1" "$Z2K_PREFLIGHT_STEP"
+    }
+    local Z2K_YT_AUTOPILOT Z2K_AUTOPILOT_ACTIVE=0
+    Z2K_YT_AUTOPILOT=$(safe_config_read "Z2K_YT_AUTOPILOT" "${ZAPRET2_DIR:-/opt/zapret2}/config" "auto")
+    case "$Z2K_YT_AUTOPILOT" in 0|1|auto) ;; *) Z2K_YT_AUTOPILOT="auto" ;; esac
+    if [ "$Z2K_YT_AUTOPILOT" != "0" ] \
+       && [ -f "${ZAPRET2_DIR:-/opt/zapret2}/lua/z2k-gv-autopilot.lua" ]; then
+        Z2K_AUTOPILOT_ACTIVE=1
+    fi
+    local Z2K_GV_SERVER_REPLY2 Z2K_GV_PREFLIGHT_MODE Z2K_PREFLIGHT_STEP=""
     Z2K_GV_SERVER_REPLY2=$(safe_config_read "Z2K_GV_SERVER_REPLY2" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
+    Z2K_GV_PREFLIGHT_MODE=$(safe_config_read "Z2K_GV_PREFLIGHT_MODE" "${ZAPRET2_DIR:-/opt/zapret2}/config" "auto")
+    case "$Z2K_GV_PREFLIGHT_MODE" in auto|1|off) ;; *) Z2K_GV_PREFLIGHT_MODE="auto" ;; esac
     # Файл проверяем на существование так же, как у z2k_sni_pick: инстанс,
     # чьей функции нет в движке, валит его в error() на каждом пакете профиля.
-    if [ "$Z2K_GV_SERVER_REPLY2" = "1" ] \
+    if [ "$Z2K_GV_SERVER_REPLY2" = "1" ] && [ "$Z2K_GV_PREFLIGHT_MODE" != "off" ] \
        && [ -f "${ZAPRET2_DIR:-/opt/zapret2}/lua/z2k-preflight.lua" ]; then
         # v6 — шаг и на IPv6. init снимает его при старте, если увидит NAT
         # для IPv6 (S99zapret2, z2k_preflight_v6_gate): за NAT повторный SYN
         # ушёл бы с внутренним адресом.
         # Обрыв начала в 58983 был на разрезанной пробе; посылаем ClientHello целиком.
         Z2K_PREFLIGHT_STEP="--in-range=a --out-range=a --payload=all --lua-desync=z2k_preflight:pos=none:pieces=1:keepts:sni=www.google.com:timeout=4:v6"
+        if [ "$Z2K_YT_AUTOPILOT" = "0" ] || [ "$Z2K_GV_PREFLIGHT_MODE" = "1" ]; then
+            Z2K_PREFLIGHT_STEP="${Z2K_PREFLIGHT_STEP}:autopilot=0"
+        fi
+    fi
+    local Z2K_GV_AUTOPILOT_STEPS=""
+    if [ "$Z2K_AUTOPILOT_ACTIVE" = "1" ]; then
+        if [ -n "$Z2K_PREFLIGHT_STEP" ]; then
+            Z2K_GV_AUTOPILOT_STEPS="--in-range=a --out-range=a --payload=all --lua-desync=z2k_autopilot_tcp_fastfail $Z2K_PREFLIGHT_STEP --lua-desync=z2k_autopilot_stall_guard"
+        else
+            Z2K_GV_AUTOPILOT_STEPS="--in-range=a --out-range=a --payload=all --lua-desync=z2k_autopilot_tcp_fastfail --lua-desync=z2k_autopilot_stall_guard"
+        fi
+    else
+        Z2K_GV_AUTOPILOT_STEPS="$Z2K_PREFLIGHT_STEP"
     fi
 
     # При известном SNI кэш YouTube должен попасть в yt_tcp даже на общем
     # с googlevideo IP или со старой строкой c.youtube.com в списке YT_GV.
     if [ "$Z2K_REFACTOR_PHASE3" != "1" ]; then
-        add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "$wl_excl --hostlist-domains=c.youtube.com $youtube_tcp --new"
+        local _yt_emit="$youtube_tcp"
+        if [ "$Z2K_AUTOPILOT_ACTIVE" = "1" ]; then
+            _yt_emit=$(inject_z2k_step "$_yt_emit" "--in-range=a --out-range=a --payload=all --lua-desync=z2k_autopilot_observe")
+        fi
+        add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "$wl_excl --hostlist-domains=c.youtube.com $_yt_emit --new"
     fi
 
     # DNS addresses identify Google video/Play in either profile layout.
     local gv_ip_tcp
-    gv_ip_tcp=$(inject_z2k_preflight "$youtube_gv_tcp")
+    gv_ip_tcp=$(inject_z2k_step "$youtube_gv_tcp" "$Z2K_GV_AUTOPILOT_STEPS")
         # Тот же профиль по адресам из ответов DNS (служба DNS-наблюдения пишет их в
         # файл до того, как отпустить ответ; движок перечитывает файл сам).
         # Имя хоста движок узнаёт только из самого соединения, и первое
@@ -1626,7 +1651,7 @@ generate_nfqws2_opt_from_strategies() {
         # по имени DNS-вопроса до публикации IP. Уже опубликованные
         # адреса сохраняются до перезагрузки: удаление может оборвать пробу A.
         # Новый whitelist не отменяет их охват A (в том числе при общих IP).
-        if [ -n "$Z2K_PREFLIGHT_STEP" ]; then
+        if [ -n "$Z2K_PREFLIGHT_STEP" ] || { [ "$Z2K_AUTOPILOT_ACTIVE" = "1" ] && [ "$Z2K_GV_SERVER_REPLY2" = "1" ]; }; then
             # validate-config идёт ДО S99 start, а после reboot /tmp пуст.
             # Подготовить файл при самой генерации, до публикации --ipset.
             local Z2K_GVSUB_IPS="${Z2K_GVSUB_IPS:-/tmp/z2k-gv-ips.txt}"
@@ -1673,6 +1698,9 @@ generate_nfqws2_opt_from_strategies() {
         local merged_google_tls
         merged_google_tls=$(printf '%s' "$youtube_tcp" | sed 's/key=yt_tcp/key=google_tls/')
         merged_google_tls="$merged_google_tls $gv_strategies_only"
+        if [ "$Z2K_AUTOPILOT_ACTIVE" = "1" ]; then
+            merged_google_tls=$(inject_z2k_step "$merged_google_tls" "--in-range=a --out-range=a --payload=all --lua-desync=z2k_autopilot_tcp_fastfail --lua-desync=z2k_autopilot_stall_guard")
+        fi
         add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/TCP/YT/List.txt --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt $merged_google_tls --new"
     else
         # YouTube GV — dedicated hostlist (extra_strats/TCP/YT_GV/List.txt,
@@ -1685,7 +1713,7 @@ generate_nfqws2_opt_from_strategies() {
         # 06.11.2026). В merge-режиме (Z2K_REFACTOR_PHASE3=1) шага нет: там
         # googlevideo живёт одним профилем с остальным ютубом, и шаг применялся
         # бы к именам, которым он не нужен.
-        youtube_gv_tcp=$(inject_z2k_preflight "$youtube_gv_tcp")
+        youtube_gv_tcp=$(inject_z2k_step "$youtube_gv_tcp" "$Z2K_GV_AUTOPILOT_STEPS")
         add_hostlist_line "${extra_strats_dir}/TCP/YT_GV/List.txt" "$wl_excl --hostlist=${extra_strats_dir}/TCP/YT_GV/List.txt $youtube_gv_tcp --new"
         add_hostlist_line "${extra_strats_dir}/TCP/YT/List.txt" "$wl_excl --hostlist-exclude=${extra_strats_dir}/TCP/YT_GV/List.txt --hostlist=${extra_strats_dir}/TCP/YT/List.txt $youtube_tcp --new"
     fi
@@ -1728,6 +1756,24 @@ generate_nfqws2_opt_from_strategies() {
     elif [ "$yt_quic_off" = "1" ] && [ "$category_youtube" != 0 ] \
          && [ -s "${extra_strats_dir}/UDP/YT/List.txt" ]; then
         nfqws2_opt_lines="$nfqws2_opt_lines$wl_excl --hostlist=${extra_strats_dir}/UDP/YT/List.txt $quic_drop\\n"
+    fi
+
+    if [ "$Z2K_AUTOPILOT_ACTIVE" = "1" ] && [ "$quic_off" != "1" ]; then
+        local ap_quic_arg=""
+        if [ "$yt_quic_off" = "1" ] || [ "$yt_quic_off" = "off" ] || [ "$category_youtube" = 0 ]; then
+            ap_quic_arg="${ap_quic_arg}:yt=0"
+        fi
+        if [ "$quic_off" = "off" ]; then
+            ap_quic_arg="${ap_quic_arg}:global=0"
+        fi
+        case "$quic_udp" in
+            *"--in-range=a --out-range=a --payload=all"*"--lua-desync=circular"*)
+                quic_udp=$(inject_z2k_step "$quic_udp" "--in-range=x --out-range=a --payload=quic_initial --lua-desync=z2k_autopilot_quic${ap_quic_arg}")
+                ;;
+            *)
+                quic_udp=$(inject_z2k_step "$quic_udp" "--in-range=x --out-range=a --payload=quic_initial --lua-desync=z2k_autopilot_quic${ap_quic_arg} --in-range=a --out-range=a --payload=all")
+                ;;
+        esac
     fi
 
     local quic_lists="" quic_anchor=""
@@ -2233,16 +2279,16 @@ create_official_config() {
     nfqws2_opt_value=$(echo "$nfqws2_opt_section" | sed -n '/^NFQWS2_OPT="/,/^"$/{ /^NFQWS2_OPT="/d; /^"$/d; p; }')
 
     # Загрузить модули для dry_run_nfqws()
-    if [ -f "/opt/zapret2/common/base.sh" ]; then
-        . "/opt/zapret2/common/base.sh"
+    if [ -f "${ZAPRET2_DIR:-/opt/zapret2}/common/base.sh" ]; then
+        . "${ZAPRET2_DIR:-/opt/zapret2}/common/base.sh"
     fi
 
-    if [ -f "/opt/zapret2/common/linux_daemons.sh" ]; then
-        . "/opt/zapret2/common/linux_daemons.sh"
+    if [ -f "${ZAPRET2_DIR:-/opt/zapret2}/common/linux_daemons.sh" ]; then
+        . "${ZAPRET2_DIR:-/opt/zapret2}/common/linux_daemons.sh"
 
         # Установить временно NFQWS2_OPT для проверки
         export NFQWS2_OPT="$nfqws2_opt_value"
-        export NFQWS2="/opt/zapret2/nfq2/nfqws2"
+        export NFQWS2="${ZAPRET2_DIR:-/opt/zapret2}/nfq2/nfqws2"
 
         # Проверить опции (dry_run может ложно падать если lua/blob файлы
         # ещё не установлены — это нормально при первой установке)
@@ -2383,6 +2429,8 @@ create_official_config() {
     # без этой строки выбор сбрасывался бы в автомат любым тумблером.
     local saved_Z2K_WARP_TRANSPORT="auto"
     local saved_Z2K_WARP_WDTT="0"
+    local saved_Z2K_YT_AUTOPILOT="auto"
+    local saved_Z2K_GV_PREFLIGHT_MODE="auto"
     # Час ночного автообновления (issue #60). Читается планировщиком
     # (files/z2k-scheduler.sh), ставится в панели: «Режимы» → Автообновление.
     local saved_Z2K_AU_HOUR="02"
@@ -2445,9 +2493,9 @@ create_official_config() {
         case "$saved_Z2K_PROVIDER_CACHE" in 0|1) ;; *) saved_Z2K_PROVIDER_CACHE="" ;; esac
         # Тумблеры QUIC сохраняются тем же механизмом.
         saved_Z2K_QUIC_OFF=$(safe_config_read "Z2K_QUIC_OFF" "$config_file" "")
-        case "$saved_Z2K_QUIC_OFF" in 0|1|"") ;; *) saved_Z2K_QUIC_OFF="" ;; esac
+        case "$saved_Z2K_QUIC_OFF" in 0|1|auto|off|"") ;; *) saved_Z2K_QUIC_OFF="" ;; esac
         saved_Z2K_YT_QUIC_OFF=$(safe_config_read "Z2K_YT_QUIC_OFF" "$config_file" "")
-        case "$saved_Z2K_YT_QUIC_OFF" in 0|1|"") ;; *) saved_Z2K_YT_QUIC_OFF="" ;; esac
+        case "$saved_Z2K_YT_QUIC_OFF" in 0|1|auto|off|"") ;; *) saved_Z2K_YT_QUIC_OFF="" ;; esac
         saved_Z2K_PANEL_AUTH=$(safe_config_read "Z2K_PANEL_AUTH" "$config_file" "0")
         saved_Z2K_AUTO_UPDATE_ENABLED=$(safe_config_read "Z2K_AUTO_UPDATE_ENABLED" "$config_file" "1")
         saved_Z2K_WARP_TRANSPORT=$(safe_config_read "Z2K_WARP_TRANSPORT" "$config_file" "auto")
@@ -2455,6 +2503,10 @@ create_official_config() {
         case "$saved_Z2K_WARP_WDTT" in 0|1) ;; *) saved_Z2K_WARP_WDTT=0 ;; esac
         # В heredoc значение уходит без кавычек — пропускаем только известное.
         case "$saved_Z2K_WARP_TRANSPORT" in wg|h2) ;; *) saved_Z2K_WARP_TRANSPORT=auto ;; esac
+        saved_Z2K_YT_AUTOPILOT=$(safe_config_read "Z2K_YT_AUTOPILOT" "$config_file" "auto")
+        case "$saved_Z2K_YT_AUTOPILOT" in 0|1|auto) ;; *) saved_Z2K_YT_AUTOPILOT="auto" ;; esac
+        saved_Z2K_GV_PREFLIGHT_MODE=$(safe_config_read "Z2K_GV_PREFLIGHT_MODE" "$config_file" "auto")
+        case "$saved_Z2K_GV_PREFLIGHT_MODE" in auto|1|off) ;; *) saved_Z2K_GV_PREFLIGHT_MODE="auto" ;; esac
         saved_Z2K_AU_HOUR=$(safe_config_read "Z2K_AU_HOUR" "$config_file" "02")
         # Час — ровно две цифры 00..23. Мусор (правка руками, обрезанный
         # конфиг) молча возвращает ночное умолчание: планировщик сравнивает
@@ -2579,9 +2631,15 @@ NFQWS2_PORTS_UDP_KEEPALIVE=""
 
 # Packet direction filters (connbytes)
 # NOTE: These are packet counts, NOT ranges
-# PKT_OUT=20 means "first 20 packets" (connbytes 1:20)
-# Official zapret2 defaults: TCP_PKT_OUT=20, UDP_PKT_OUT=5
-NFQWS2_TCP_PKT_OUT="20"
+# Ядерный xt_connbytes --connbytes-dir=original считает в nf_conntrack не только
+# пакеты клиента, но и исходящие fake/split-сегменты от rawsend() стратегий (9+ пакетов
+# на gv_tcp), поэтому на 2-пакетном PQ ClientHello + 10-КБ SABR POST /videoplayback
+# + ACK ответа поток уходит за 30 пакетов. Парой идут два окна:
+#   • NFQWS2_TCP_PKT_OUT="45" — исходящие пакеты (original) на входе в NFQUEUE;
+#   • PPE_CONNSKIP=60 (z2k-ppe-deoffload.sh) — двунаправленные пакеты (original+reply),
+#     после 60-го пакета поток переходит в аппаратный ускоритель PPE Keenetic.
+# Окно входящих NFQWS2_TCP_PKT_IN остаётся "10".
+NFQWS2_TCP_PKT_OUT="45"
 NFQWS2_TCP_PKT_IN="${nfqws2_tcp_pkt_in}"
 # UDP-окно: 8/8 вместо апстримных 5/3.
 #
@@ -2879,6 +2937,12 @@ Z2K_PANEL_AUTH=${saved_Z2K_PANEL_AUTH}
 Z2K_AUTO_UPDATE_ENABLED=${saved_Z2K_AUTO_UPDATE_ENABLED}
 Z2K_WARP_TRANSPORT=${saved_Z2K_WARP_TRANSPORT}
 Z2K_WARP_WDTT=${saved_Z2K_WARP_WDTT}
+# Автопилот YouTube / googlevideo / gvt1 (auto|1|0). По умолчанию auto
+# работает автоматически из коробки, сохраняя ручные оверрайды 0/1.
+Z2K_YT_AUTOPILOT=${saved_Z2K_YT_AUTOPILOT}
+# Режим preflight при активном автопилоте (auto|1|off). По умолчанию auto
+# делегирует решение автопилоту, off отключает только пробу без остановки gvsub.
+Z2K_GV_PREFLIGHT_MODE=${saved_Z2K_GV_PREFLIGHT_MODE}
 # Час ночного автообновления, 00..23 по времени роутера. Реальный запуск
 # позже на 0..60 минут: разброс детерминированный по хосту, чтобы флот не
 # пришёл к GitHub в одну секунду (см. z2k_host_jitter в z2k-auto-update.sh).
