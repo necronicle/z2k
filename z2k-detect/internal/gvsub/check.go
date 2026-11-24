@@ -294,9 +294,14 @@ func (nc NetChecker) Probe(ctx context.Context, req ProbeRequest) ProbeResult {
 			v = VerdictDeadGGC
 		}
 		res := ProbeResult{Verdict: v, RTT: rtt, TLSFast: fast, UsedContour2: c2Armed}
-		if v != VerdictDeadGGC && req.CheckQUIC && req.Host != "" {
-			res.QUICChecked = true
-			res.QUICOK = nc.probeQUIC2of2(ctx, req, tlsTO)
+		if req.CheckQUIC && req.Host != "" {
+			if v == VerdictGoodGGC {
+				res.QUICChecked = true
+				res.QUICOK = nc.probeQUIC2of2(ctx, req, tlsTO)
+			} else if v == VerdictBadBypassable {
+				res.QUICChecked = true
+				res.QUICOK = false
+			}
 		}
 		return res
 	}
@@ -338,7 +343,7 @@ func (nc NetChecker) Probe(ctx context.Context, req ProbeRequest) ProbeResult {
 	res := ProbeResult{Verdict: verdict, RTT: rtt, UsedContour2: c2Armed}
 	if verdict == VerdictBadBypassable && req.CheckQUIC && req.Host != "" {
 		res.QUICChecked = true
-		res.QUICOK = nc.probeQUIC2of2(ctx, req, tlsTO)
+		res.QUICOK = false
 	}
 	return res
 }
@@ -585,6 +590,7 @@ func (nc NetChecker) contour2HTTP(ctx context.Context, addr netip.Addr, host str
 			tlsConn := tls.Client(rawConn, &tls.Config{
 				ServerName:         host,
 				InsecureSkipVerify: true, // #nosec G402 -- проверяем доступность кэша под реальным SNI
+				CurvePreferences:   []tls.CurveID{tls.X25519},
 			})
 			if err := tlsConn.HandshakeContext(dctx); err != nil {
 				_ = rawConn.Close()

@@ -206,8 +206,28 @@ func TestNetCheckerTwoContourAllBranches(t *testing.T) {
 			PolicyMark: 0x0ffffaab, CheckQUIC: true,
 			WaitBeforeContour2: func(context.Context) error { waitCalls++; return nil },
 		})
-		if res.Verdict != VerdictBadBypassable || !res.UsedContour2 || !res.QUICChecked || res.QUICOK || waitCalls != 1 || httpCalls != 1 || quicCalls != 1 {
+		if res.Verdict != VerdictBadBypassable || !res.UsedContour2 || !res.QUICChecked || res.QUICOK || waitCalls != 1 || httpCalls != 1 || quicCalls != 0 {
 			t.Fatalf("unexpected BadBypassable result: %+v wait=%d http=%d quic=%d", res, waitCalls, httpCalls, quicCalls)
+		}
+
+		// Even when probeQUICFn returns nil (simulated Server Initial), BadBypassable skips QUIC probing and forces QUICOK=false.
+		quicCallsNil := 0
+		ncNil := NetChecker{
+			probeTLSFn: nc.probeTLSFn,
+			probeHTTPFn: func(context.Context, netip.Addr, string, uint32, time.Duration, time.Duration) (bool, bool, time.Duration) {
+				return true, false, 90 * time.Millisecond
+			},
+			probeQUICFn: func(context.Context, netip.Addr, string, uint32, time.Duration) error {
+				quicCallsNil++
+				return nil
+			},
+		}
+		resNil := ncNil.Probe(context.Background(), ProbeRequest{
+			Addr: netip.MustParseAddr("74.125.99.27"), Host: gvName, Kind: KindGVCacheGoogle,
+			PolicyMark: 0x0ffffaab, CheckQUIC: true,
+		})
+		if resNil.Verdict != VerdictBadBypassable || !resNil.QUICChecked || resNil.QUICOK || quicCallsNil != 0 {
+			t.Fatalf("BadBypassable must force QUICOK=false even if probeQUICFn would return nil: %+v quic=%d", resNil, quicCallsNil)
 		}
 	})
 
@@ -738,7 +758,7 @@ func TestObservedTSVFeedAndAtomicPolicyDatAndStatusJSON(t *testing.T) {
 	for _, want := range []string{
 		"type=header\tversion=1\tupdated=1795462629\tusable_v4=3\tusable_v6=0\tbaseline_rtt_ms=40\tggc_rtt_ms=22\tglobal_quic_blocked=0\tpreflight_sni=www.google.com",
 		"resyn_delay_ms=", "preflight_giveup_ms=", "ggc_stall_guard_ms=",
-		"type=prefix\taddr=173.194.164.0/24\tkind=google\tverdict=bad_bypassable\tquic_ok=1\trtt_ms=430",
+		"type=prefix\taddr=173.194.164.0/24\tkind=google\tverdict=bad_bypassable\tquic_ok=0\trtt_ms=430",
 		"type=prefix\taddr=74.125.99.0/24\tkind=play\tverdict=good_direct\tquic_ok=1\trtt_ms=55",
 		"type=ip\taddr=46.61.136.174\tkind=isp\tverdict=good_ggc\tquic_ok=0\trtt_ms=22",
 	} {
@@ -865,6 +885,40 @@ func TestBlockPortalStrictHostMatchingAndBudgetAndMixedPrefixSafety(t *testing.T
 
 	if v17 != VerdictBadBypassable || !q17 || v18 != VerdictGoodDirect || v19 != VerdictBadBypassable {
 		t.Fatalf("mixed /24 inheritance bug: v17=%v(q=%v) v18=%v v19=%v pfx=%+v", v17, q17, v18, v19, pfx)
+	}
+
+	// Effective policy.dat promotion under hasGoogleBlock: ip18 (false good_direct) -> bad_bypassable, quic_ok=0.
+	polMixed, err := os.ReadFile(s.PolicyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	polMixedStr := string(polMixed)
+	if !strings.Contains(polMixedStr, "type=ip\taddr=74.125.100.18\tkind=google\tverdict=bad_bypassable\tquic_ok=0") {
+		t.Fatalf("policy.dat did not promote ip18 under hasGoogleBlock:\n%s", polMixedStr)
+	}
+
+	// Clean line (!hasGVCensorship): single KindGVCacheGoogle with GoodDirect + QUICOK keeps good_direct and quic_ok=1.
+	cleanDir := t.TempDir()
+	ipClean := netip.MustParseAddr("74.125.101.18")
+	sClean := &Service{
+		Prober: &scriptProber{
+			onProbe: func(ProbeRequest) ProbeResult {
+				return ProbeResult{Verdict: VerdictGoodDirect, RTT: 30 * time.Millisecond, TLSFast: true, QUICChecked: true, QUICOK: true}
+			},
+		},
+		StatusPath:  filepath.Join(cleanDir, "gvsub.json"),
+		IPFile:      filepath.Join(cleanDir, "ips"),
+		PolicyPath:  filepath.Join(cleanDir, "policy.dat"),
+		NeutralWait: -1,
+	}
+	t.Cleanup(sClean.Shutdown)
+	wait(t, sClean.OnDNS(gvName, []netip.Addr{ipClean}))
+	polClean, err := os.ReadFile(sClean.PolicyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(polClean), "type=ip\taddr=74.125.101.18\tkind=google\tverdict=good_direct\tquic_ok=1") {
+		t.Fatalf("clean line policy.dat lost good_direct/quic_ok=1:\n%s", string(polClean))
 	}
 
 	// 4. VerifyPolicyMark and ProbeOracles finish within parallel budget when QUIC/routes stall.

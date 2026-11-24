@@ -835,6 +835,53 @@ func (s *Service) Tick() {
 	s.writeStatus()
 }
 
+// censorshipStateLocked определяет по уже известным узлам и префиксам,
+// присутствует ли на текущей линии ТСПУ-фильтрация зарубежных кэшей Google
+// и/или кэшей googlevideo.com в целом. Вызывается под s.mu.Lock().
+func (s *Service) censorshipStateLocked() (hasGoogleBlock, hasGVCensorship bool) {
+	for _, e := range s.known {
+		if e == nil {
+			continue
+		}
+		if e.kind == KindGVCacheGoogle && (e.verdict == VerdictBadBypassable || e.verdict == VerdictBadUnbypassable) {
+			hasGoogleBlock = true
+			hasGVCensorship = true
+		} else if e.kind == KindGVCacheISP && (e.verdict == VerdictBadBypassable || e.verdict == VerdictDeadGGC) {
+			hasGVCensorship = true
+		}
+	}
+	for _, ps := range s.prefixes {
+		if ps == nil {
+			continue
+		}
+		if ps.kind == KindGVCacheGoogle && (ps.verdict == VerdictBadBypassable || ps.c2Verdict == VerdictBadBypassable || ps.verdict == VerdictBadUnbypassable) {
+			hasGoogleBlock = true
+			hasGVCensorship = true
+		}
+	}
+	return hasGoogleBlock, hasGVCensorship
+}
+
+// effectivePolicyVerdictAndQUIC вычисляет безопасные для policy.dat и .neutral
+// вердикт и флаг QUIC без мутации сырого состояния в памяти:
+//   - на линиях с блоком Google одиночные false-good_direct на нейтральный SNI
+//     поднимаются до bad_bypassable;
+//   - при доказанной ТСПУ-цензуре googlevideo.com потоки Google/ISP переводятся
+//     из ненадёжного QUIC (где отсутствует preflight/stall_guard) в TCP.
+func effectivePolicyVerdictAndQUIC(kind NodeKind, v Verdict, quicChecked, quicOK, hasGoogleBlock, hasGVCensorship bool) (effVerdict Verdict, effQUICOK bool, rejectUDP bool) {
+	effVerdict = v
+	if kind == KindGVCacheGoogle && v == VerdictGoodDirect && hasGoogleBlock {
+		effVerdict = VerdictBadBypassable
+	}
+	if effVerdict != VerdictGoodDirect && effVerdict != VerdictGoodGGC {
+		return effVerdict, false, effVerdict == VerdictBadBypassable
+	}
+	if (kind == KindGVCacheGoogle || kind == KindGVCacheISP) && hasGVCensorship {
+		return effVerdict, false, true
+	}
+	return effVerdict, quicOK, quicChecked && !quicOK
+}
+
 // Bad / Dead / Probe / Provider / Reject записываются в .neutral для Lua-детекторов nfqws2.
 func (s *Service) writeNeutral() {
 	if s.StatusPath == "" {
@@ -845,21 +892,28 @@ func (s *Service) writeNeutral() {
 	s.mu.Lock()
 	var rows []string
 	if !s.closed {
+		hasGoogleBlock, hasGVCensorship := s.censorshipStateLocked()
 		for a, e := range s.known {
 			hx := hex.EncodeToString(a.AsSlice())
 			if _, ok := s.probing[a]; ok {
 				rows = append(rows, "probe "+hx)
 			}
-			if providerCache(e.name, a) && e.verdict != VerdictBadBypassable {
+			if e == nil {
+				continue
+			}
+			if providerCache(e.name, a) {
 				rows = append(rows, "provider "+hx)
 			}
-			switch e.verdict {
+			effVerdict, _, rejectUDP := effectivePolicyVerdictAndQUIC(
+				e.kind, e.verdict, e.quicChecked, e.quicOK, hasGoogleBlock, hasGVCensorship,
+			)
+			switch effVerdict {
 			case VerdictBadUnbypassable:
 				rows = append(rows, "bad "+hx)
 			case VerdictDeadL3, VerdictDeadGGC:
 				rows = append(rows, "dead "+hx)
 			case VerdictBadBypassable, VerdictGoodDirect, VerdictGoodGGC:
-				if e.quicChecked && !e.quicOK {
+				if rejectUDP {
 					rows = append(rows, "reject "+hx)
 				}
 			}
@@ -1074,6 +1128,7 @@ func (s *Service) writePolicy() {
 	s.init()
 	now := s.Now()
 	usableV4, usableV6, baseRTT, ggcRTT, _, globalQUICBlocked, preSNI, timings := s.snapshotMetricsLocked()
+	hasGoogleBlock, hasGVCensorship := s.censorshipStateLocked()
 	qBlocked := 0
 	if globalQUICBlocked {
 		qBlocked = 1
@@ -1131,22 +1186,28 @@ func (s *Service) writePolicy() {
 			ggcForRow = r.ps.rttMs
 		}
 		pt := CalibrateTiming(baseRTT, r.ps.rttMs, ggcForRow)
+		effVerdict, effQUICOK, _ := effectivePolicyVerdictAndQUIC(
+			r.ps.kind, r.ps.verdict, r.ps.quicChecked, r.ps.quicOK, hasGoogleBlock, hasGVCensorship,
+		)
 		qok := 0
-		if r.ps.quicOK {
+		if effQUICOK {
 			qok = 1
 		}
 		fmt.Fprintf(&sb, "type=prefix\taddr=%s\tkind=%s\tverdict=%s\tquic_ok=%d\trtt_ms=%d\tresyn_delay_ms=%d\tgiveup_ms=%d\tstall_ms=%d\n",
-			r.cidr, r.ps.kind.String(), r.ps.verdict.String(), qok, r.ps.rttMs,
+			r.cidr, r.ps.kind.String(), effVerdict.String(), qok, r.ps.rttMs,
 			pt.ResynDelayMs, pt.PreflightGiveupMs, pt.GGCStallGuardMs)
 	}
 
 	for _, r := range ipRows {
+		effVerdict, effQUICOK, _ := effectivePolicyVerdictAndQUIC(
+			r.e.kind, r.e.verdict, r.e.quicChecked, r.e.quicOK, hasGoogleBlock, hasGVCensorship,
+		)
 		qok := 0
-		if r.e.quicOK {
+		if effQUICOK {
 			qok = 1
 		}
 		fmt.Fprintf(&sb, "type=ip\taddr=%s\tkind=%s\tverdict=%s\tquic_ok=%d\trtt_ms=%d\tresyn_delay_ms=%d\tgiveup_ms=%d\tstall_ms=%d\n",
-			r.addr.String(), r.e.kind.String(), r.e.verdict.String(), qok, r.e.rttMs,
+			r.addr.String(), r.e.kind.String(), effVerdict.String(), qok, r.e.rttMs,
 			r.pt.ResynDelayMs, r.pt.PreflightGiveupMs, r.pt.GGCStallGuardMs)
 	}
 
