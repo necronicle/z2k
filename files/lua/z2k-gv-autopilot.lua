@@ -22,6 +22,7 @@ local CACHE_TTL_SEC = 1.0
 local NEUTRAL_CACHE_TTL_SEC = 0.5
 local DEFAULT_POLICY_STALE_SEC = 300
 local OBSERVED_DEDUPE_SEC = 120.0
+local OBSERVED_HEARTBEAT_SEC = 600.0
 local OBSERVED_MAX_LINES = 256
 local OBSERVED_MAX_BYTES = 32768
 local ANTISTORM_WINDOW_SEC = 3.0
@@ -639,6 +640,17 @@ local function append_observed_line(dst_text, host)
     end
 end
 
+local function mark_observed_seen(dedupe_key, now)
+    if observed_seen_count >= 1024 then
+        observed_seen = {}
+        observed_seen_count = 0
+    end
+    if not observed_seen[dedupe_key] then
+        observed_seen_count = observed_seen_count + 1
+    end
+    observed_seen[dedupe_key] = now
+end
+
 local function observe_packet(desync)
     if not (desync and desync.outgoing and desync.dis) then return end
     local l7 = desync.l7payload
@@ -648,34 +660,49 @@ local function observe_packet(desync)
     local host = normalize_observed_host(track.hostname)
     if not host then return end
 
-    local raw_dst = (desync.dis.ip6 and desync.dis.ip6.ip6_dst) or (desync.dis.ip and desync.dis.ip.ip_dst)
-    if not raw_dst then return end
-
-    local pol = load_policy()
-    local existing = pol and pol.ips[raw_dst]
-    if existing and existing.verdict ~= "unknown" and existing.kind ~= "gfe" and existing.kind ~= "yt" then
+    -- Не самоподпитываем observed.tsv собственными зондами Контура-2 gvsub.
+    if (not desync.ifin or desync.ifin == "") and is_probe_guard_dis(desync.dis, desync.arg) then
         return
     end
+
+    local raw_dst = (desync.dis.ip6 and desync.dis.ip6.ip6_dst) or (desync.dis.ip and desync.dis.ip.ip_dst)
+    if not raw_dst then return end
 
     local dst_text = bin_to_ip_text(raw_dst)
     if not dst_text then return end
 
+    local pol = load_policy()
+    local existing = pol and pol.ips[raw_dst]
+    local is_classified = existing
+        and existing.verdict ~= "unknown"
+        and existing.kind ~= "gfe"
+        and existing.kind ~= "yt"
+
     local now = clock_now()
     local dedupe_key = dst_text .. "\t" .. host
     local last = observed_seen[dedupe_key]
+
+    if is_classified then
+        -- Уже классифицированный узел не пишем при первом появлении, но раз в 10 мин
+        -- (OBSERVED_HEARTBEAT_SEC) подтверждаем его активность для gvsub (ActiveFor=30m / IdleDrop=1h),
+        -- чтобы DoH-кэши не протухали на длинных сессиях (30-60+ мин).
+        if not last or now < last then
+            mark_observed_seen(dedupe_key, now)
+            return
+        end
+        if (now - last) < OBSERVED_HEARTBEAT_SEC then
+            return
+        end
+        mark_observed_seen(dedupe_key, now)
+        append_observed_line(dst_text, host)
+        return
+    end
+
     if last and now >= last and (now - last) < OBSERVED_DEDUPE_SEC then
         return
     end
 
-    if observed_seen_count >= 1024 then
-        observed_seen = {}
-        observed_seen_count = 0
-    end
-    if not observed_seen[dedupe_key] then
-        observed_seen_count = observed_seen_count + 1
-    end
-    observed_seen[dedupe_key] = now
-
+    mark_observed_seen(dedupe_key, now)
     append_observed_line(dst_text, host)
 end
 

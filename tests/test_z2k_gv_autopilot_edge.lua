@@ -667,6 +667,63 @@ write_policy({
 z2k_preflight({}, { outgoing = true, ifout = "eth3", dis = tcp4(CLI4, IP_BAD_BYP, 44003, 443, TH_SYN, 8000, 0, ""), arg = { timeout = 4 } })
 is("sweep removes expired flow giveup timer", nil, timers[g_sw])
 
+-- 9) DoH heartbeat (600s) для уже классифицированного IP на длинных сессиях (30-60+ мин)
+reset_state()
+local hb_ip = ip4_bytes(10, 88, 1, 20)
+local hb_host = "rr5---sn-hb.googlevideo.com"
+local ch_hb = make_tls_ch(hb_host)
+local function write_hb_policy(ts)
+    local pf = assert(io.open(pol_file, "w"))
+    pf:write(string.format(
+        "type=header\tversion=1\tupdated=%d\tusable_v4=1\tusable_v6=1\tglobal_quic_blocked=0\tpreflight_sni=alt.white.ru\tresyn_delay_ms=140\tpreflight_giveup_ms=1200\tggc_stall_guard_ms=1800\n"
+        .. "type=ip\taddr=10.88.1.20\tkind=isp\tverdict=good_ggc\tquic_ok=1\tstall_ms=1900\n",
+        math.floor(ts)
+    ))
+    pf:close()
+end
+write_hb_policy(clock_now)
+z2k_autopilot_reset()
+z2k_autopilot_set_paths(pol_file, obs_file, neu_file)
+
+local hb_t0 = clock_now
+local function send_hb(ts, ifin_val, ip_raw, host_name, ch_buf)
+    clock_now = ts
+    write_hb_policy(ts)
+    z2k_autopilot_observe({}, {
+        outgoing = true,
+        ifin = ifin_val,
+        l7payload = "tls_client_hello",
+        track = { hostname = host_name, lua_state = {} },
+        dis = tcp4(CLI4, ip_raw, 45001, 443, TH_ACK + TH_PUSH, 100, 200, ch_buf),
+    })
+end
+
+send_hb(hb_t0, "br0", hb_ip, hb_host, ch_hb)
+is("classified IP first observe does not write disk", "", read_observed())
+send_hb(hb_t0 + 250, "br0", hb_ip, hb_host, ch_hb)
+is("classified IP within 250s does not write heartbeat", "", read_observed())
+send_hb(hb_t0 + 599, "br0", hb_ip, hb_host, ch_hb)
+is("classified IP at 599s still skips heartbeat", "", read_observed())
+send_hb(hb_t0 + 605, "br0", hb_ip, hb_host, ch_hb)
+local obs_hb1 = read_observed()
+is("classified IP after 600s writes DoH heartbeat", true, obs_hb1:find("10.88.1.20\trr5---sn-hb.googlevideo.com\n", 1, true) ~= nil)
+send_hb(hb_t0 + 900, "br0", hb_ip, hb_host, ch_hb)
+is("classified IP at 900s does not duplicate heartbeat", #obs_hb1, #read_observed())
+send_hb(hb_t0 + 1210, "br0", hb_ip, hb_host, ch_hb)
+is("classified IP after next 600s writes second heartbeat", true, #read_observed() > #obs_hb1)
+
+-- 10) Собственные зонды Контура-2 gvsub (.neutral probe, ifin=""/nil) не засоряют observed.tsv
+reset_state()
+local obs_probe_ip = ip4_bytes(10, 88, 1, 33) -- hex 0a580121
+local np_obs = assert(io.open(neu_file, "w"))
+np_obs:write("probe 0a580121\n")
+np_obs:close()
+send_hb(clock_now + 2, "", obs_probe_ip, "rr1---sn-c2probe.googlevideo.com", make_tls_ch("rr1---sn-c2probe.googlevideo.com"))
+send_hb(clock_now + 2, nil, obs_probe_ip, "rr2---sn-c2probe.googlevideo.com", make_tls_ch("rr2---sn-c2probe.googlevideo.com"))
+is("active gvsub probe (ifin empty/nil) skips observed.tsv", "", read_observed())
+send_hb(clock_now + 2, "br0", obs_probe_ip, "rr1---sn-c2probe.googlevideo.com", make_tls_ch("rr1---sn-c2probe.googlevideo.com"))
+is("LAN client on same IP logs immediately after probe skipped", true, read_observed():find("10.88.1.33\trr1---sn-c2probe.googlevideo.com\n", 1, true) ~= nil)
+
 -- luacheck: ignore 122
 os.time = orig_os_time
 os.remove(pol_file)
