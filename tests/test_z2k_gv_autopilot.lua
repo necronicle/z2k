@@ -216,6 +216,7 @@ do
 
     is("v4 /24 mask", z2k_autopilot_parse_ip("74.125.100.0"), z2k_autopilot_mask_prefix(b4, 24))
     is("v6 /48 mask", z2k_autopilot_parse_ip("2a00:1450:4005::"), z2k_autopilot_mask_prefix(v6_comp, 48))
+    is("v6 /64 mask", z2k_autopilot_parse_ip("2a00:1450:400f:6::"), z2k_autopilot_mask_prefix(z2k_autopilot_parse_ip("2a00:1450:400f:6::abcd"), 64))
     is("v4 /25 bit mask", z2k_autopilot_parse_ip("10.0.0.128"), z2k_autopilot_mask_prefix(z2k_autopilot_parse_ip("10.0.0.255"), 25))
 end
 
@@ -249,6 +250,8 @@ do
         .. "type=prefix\taddr=74.125.100.0/24\tkind=google\tverdict=bad_bypassable\tquic_ok=0\trtt_ms=90\tresyn_delay_ms=150\tgiveup_ms=1800\tstall_ms=1900\n"
         .. "type=ip\taddr=74.125.100.17\tkind=google\tverdict=good_direct\tquic_ok=1\trtt_ms=30\tresyn_delay_ms=80\tgiveup_ms=1200\tstall_ms=1600\n"
         .. "type=prefix\taddr=2a00:1450:4005:0000::/48\tkind=google\tverdict=dead_l3\tquic_ok=0\n"
+        .. "type=prefix\taddr=2a00:1450:400f:6::/64\tkind=google\tverdict=good_ggc\tquic_ok=0\n"
+        .. "type=prefix\taddr=2a00:1450:400f:7::/64\tkind=google\tverdict=bad_bypassable\tquic_ok=0\n"
         .. "type=ip\taddr=2A00:1450:4005:0002:0000:0000:0000:0007\tkind=google\tverdict=good_direct\tquic_ok=1\n",
         math.floor(fake_now)
     ))
@@ -266,6 +269,10 @@ do
     is("expanded IPv6 in policy matches compressed raw IPv6", "good_direct", e_v6.verdict)
     local e_v6_pfx = z2k_autopilot_lookup_text("2a00:1450:4005:9999::1")
     is("IPv6 /48 prefix fallback", "dead_l3", e_v6_pfx.verdict)
+    local e_v6_64a = z2k_autopilot_lookup_text("2a00:1450:400f:6::42")
+    is("IPv6 /64 cluster A", "good_ggc", e_v6_64a.verdict)
+    local e_v6_64b = z2k_autopilot_lookup_text("2a00:1450:400f:7::42")
+    is("IPv6 /64 cluster B", "bad_bypassable", e_v6_64b.verdict)
 
     -- Проверка 1с TTL и отката часов
     write_file(pol_path, string.format(

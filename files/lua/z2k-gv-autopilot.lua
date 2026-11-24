@@ -29,6 +29,8 @@ local ANTISTORM_WINDOW_SEC = 3.0
 local ANTISTORM_MAX_RSTS = 5 -- строго < 6 RST за 3с на клиента
 
 local DEFAULT_STALL_MS = 1800
+local STALLED_GGC_TTL_SEC = 120.0
+local STALLED_GGC_MAX_ENTRIES = 128
 local MIN_STALL_MS = 1600
 local MAX_STALL_MS = 3500
 
@@ -64,6 +66,46 @@ local observed_seen = {}
 local observed_seen_count = 0
 local rst_history = {}
 local active_stall_timers = {}
+local stalled_ggc = {}
+
+local function mark_stalled_ggc(srv_raw, now)
+    if type(srv_raw) ~= "string" or srv_raw == "" then
+        return
+    end
+    local count = 0
+    local oldest_ip = nil
+    local oldest_exp = nil
+    for k, exp in pairs(stalled_ggc) do
+        if now >= exp then
+            stalled_ggc[k] = nil
+        else
+            count = count + 1
+            if not oldest_exp or exp < oldest_exp then
+                oldest_exp = exp
+                oldest_ip = k
+            end
+        end
+    end
+    if not stalled_ggc[srv_raw] and count >= STALLED_GGC_MAX_ENTRIES and oldest_ip then
+        stalled_ggc[oldest_ip] = nil
+    end
+    stalled_ggc[srv_raw] = now + STALLED_GGC_TTL_SEC
+end
+
+local function is_stalled_ggc(srv_raw, now)
+    if type(srv_raw) ~= "string" or srv_raw == "" then
+        return false
+    end
+    local exp = stalled_ggc[srv_raw]
+    if not exp then
+        return false
+    end
+    if now >= exp then
+        stalled_ggc[srv_raw] = nil
+        return false
+    end
+    return true
+end
 
 local function band(a, b)
     if type(bitand) == "function" then
@@ -896,14 +938,23 @@ function z2k_autopilot_tcp_fastfail(ctx, desync)
     if entry.kind ~= "google" and entry.kind ~= "isp" then
         return
     end
-    if entry.verdict ~= "dead_l3" and entry.verdict ~= "dead_ggc" and entry.verdict ~= "bad_unbypassable" then
-        return
-    end
 
     local is_v6 = dis.ip6 ~= nil
     local cli_src = is_v6 and dis.ip6.ip6_src or dis.ip.ip_src
     local srv_dst = is_v6 and dis.ip6.ip6_dst or dis.ip.ip_dst
-    if not prune_and_allow_rst(cli_src, clock_now()) then
+    local now = clock_now()
+    local usable_total = (tonumber(header.usable_v4) or 0) + (tonumber(header.usable_v6) or 0)
+    local is_dead_verdict = (entry.verdict == "dead_l3"
+        or entry.verdict == "dead_ggc"
+        or entry.verdict == "bad_unbypassable")
+    local is_stalled = (not is_dead_verdict)
+        and entry.kind == "isp"
+        and usable_total >= 2
+        and is_stalled_ggc(srv_dst, now)
+    if not is_dead_verdict and not is_stalled then
+        return
+    end
+    if not prune_and_allow_rst(cli_src, now) then
         dlog("z2k_autopilot_tcp_fastfail: anti-storm skip RST")
         return
     end
@@ -921,7 +972,9 @@ function z2k_autopilot_tcp_fastfail(ctx, desync)
     if type(rawsend_dissect) == "function" then
         local ok = rawsend_dissect(rst_dis, { ifout = ifout })
         if ok then
-            dlog("z2k_autopilot_tcp_fastfail: RST,ACK sent (" .. tostring(entry.kind) .. "/" .. tostring(entry.verdict) .. ")")
+            local ff_reason = is_stalled and "isp/stalled_ggc"
+                or (tostring(entry.kind) .. "/" .. tostring(entry.verdict))
+            dlog("z2k_autopilot_tcp_fastfail: RST,ACK sent (" .. ff_reason .. ")")
         else
             dlog("z2k_autopilot_tcp_fastfail: rawsend_dissect failed")
         end
@@ -1002,6 +1055,7 @@ function z2k_autopilot_stall_timer(name, st)
         )
         rawsend_dissect(cli_rst, { ifout = st.cli_iface })
         rawsend_dissect(srv_rst, { ifout = st.srv_iface, fwmark = st.fwmark })
+        mark_stalled_ggc(st.srv_ip, clock_now())
         dlog(string.format(
             "z2k_autopilot_stall_guard: bidirectional RST sent after stall srv=%s:%d cli=%s:%d cli_if=%s srv_if=%s",
             tostring(bin_to_ip_text(st.srv_ip)), tonumber(st.srv_port) or 0,
@@ -1456,6 +1510,7 @@ function z2k_autopilot_reset()
     observed_seen = {}
     observed_seen_count = 0
     rst_history = {}
+    stalled_ggc = {}
     for _, st in pairs(active_stall_timers) do
         cancel_stall_timer(st)
     end

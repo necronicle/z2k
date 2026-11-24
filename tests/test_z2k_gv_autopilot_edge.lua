@@ -1,5 +1,5 @@
 -- Edge-case regression tests for z2k-gv-autopilot + z2k-preflight v2.0
--- luacheck: globals DLOG bitand u32 u32add seq_ge bu8 bu32 find_tcp_option deepcopy blob tls_mod resolve_multi_pos delete_pos_1 rawsend_dissect rawsend reconstruct_dissect instance_cutoff_shim execution_plan_cancel direction_cutoff_opposite payload_check replay_first clock_getfloattime timer_set timer_del VERDICT_DROP VERDICT_PASS VERDICT_MODIFY TH_FIN TH_SYN TH_RST TH_PUSH TH_ACK TCP_KIND_NOOP TCP_KIND_MSS TCP_KIND_SCALE TCP_KIND_TS z2k_preflight z2k_preflight_giveup_timer z2k_autopilot_quic z2k_autopilot_observe z2k_autopilot_stall_guard z2k_autopilot_stall_timer z2k_autopilot_is_probe_dis z2k_autopilot_reset z2k_autopilot_set_paths
+-- luacheck: globals DLOG bitand u32 u32add seq_ge bu8 bu32 find_tcp_option deepcopy blob tls_mod resolve_multi_pos delete_pos_1 rawsend_dissect rawsend reconstruct_dissect instance_cutoff_shim execution_plan_cancel direction_cutoff_opposite payload_check replay_first clock_getfloattime timer_set timer_del VERDICT_DROP VERDICT_PASS VERDICT_MODIFY TH_FIN TH_SYN TH_RST TH_PUSH TH_ACK TCP_KIND_NOOP TCP_KIND_MSS TCP_KIND_SCALE TCP_KIND_TS z2k_preflight z2k_preflight_giveup_timer z2k_autopilot_quic z2k_autopilot_observe z2k_autopilot_stall_guard z2k_autopilot_stall_timer z2k_autopilot_tcp_fastfail z2k_autopilot_is_probe_dis z2k_autopilot_reset z2k_autopilot_set_paths
 -- luacheck: ignore 122
 
 local ROOT = arg and arg[0] and arg[0]:match("^(.*)/tests/[^/]+$") or "."
@@ -896,23 +896,44 @@ z2k_preflight({}, {
 is("preflight bypasses isp bad_bypassable (cutoff)", 1, cutoffs)
 is("preflight bypasses isp bad_bypassable (0 timers)", nil, next(timers))
 
--- 12b) Active gvsub probe (.neutral probe cb007137, ifin="") bypasses preflight; LAN (ifin="br0") enters probe_syn
+-- 12b) Active gvsub probes bypass preflight for isp/unknown, while kind=google (bad_bypassable) enters probe_syn
 reset_state()
 local nf_pf = assert(io.open(neu_file, "w"))
-nf_pf:write("probe cb007137\n")
+nf_pf:write("probe 0a58010a\nprobe c6336401\nprobe cb007137\n")
 nf_pf:close()
 z2k_autopilot_set_paths(pol_file, obs_file, neu_file)
 z2k_preflight({}, {
     outgoing = true, ifin = "", ifout = "eth3",
-    dis = tcp4(CLI4, IP_BAD_BYP, 46101, 443, TH_SYN, 1100, 0, ""),
+    dis = tcp4(CLI4, IP_ISP, 46101, 443, TH_SYN, 1100, 0, ""),
     arg = { timeout = 4 },
 })
-is("preflight bypasses active gvsub probe (ifin empty)", 1, cutoffs)
-is("preflight active probe spawns 0 timers", nil, next(timers))
+is("preflight bypasses active gvsub probe for isp (ifin empty)", 1, cutoffs)
+is("preflight active isp probe spawns 0 timers", nil, next(timers))
 
 z2k_preflight({}, {
+    outgoing = true, ifin = "", ifout = "eth3",
+    dis = tcp4(CLI4, ip4_bytes(198, 51, 100, 1), 46102, 443, TH_SYN, 1100, 0, ""),
+    arg = { timeout = 4 },
+})
+is("preflight bypasses active gvsub probe for unknown (ifin empty)", 2, cutoffs)
+is("preflight active unknown probe spawns 0 timers", nil, next(timers))
+
+z2k_preflight({}, {
+    outgoing = true, ifin = "", ifout = "eth3",
+    dis = tcp4(CLI4, IP_BAD_BYP, 46103, 443, TH_SYN, 1100, 0, ""),
+    arg = { timeout = 4 },
+})
+local g_probe_google, _ = find_timer("z2k_pf_giveup_")
+is("preflight runs probe_syn for active google bad_bypassable probe", true, g_probe_google ~= nil)
+
+reset_state()
+local nf_pf_lan = assert(io.open(neu_file, "w"))
+nf_pf_lan:write("probe cb007137\n")
+nf_pf_lan:close()
+z2k_autopilot_set_paths(pol_file, obs_file, neu_file)
+z2k_preflight({}, {
     outgoing = true, ifin = "br0", ifout = "eth3",
-    dis = tcp4(CLI4, IP_BAD_BYP, 46102, 443, TH_SYN, 1200, 0, ""),
+    dis = tcp4(CLI4, IP_BAD_BYP, 46104, 443, TH_SYN, 1200, 0, ""),
     arg = { timeout = 4 },
 })
 local g_lan, _ = find_timer("z2k_pf_giveup_")
@@ -944,6 +965,96 @@ rawsend = orig_rawsend
 is("z2k_autopilot_quic drops bad_bypassable even if quic_ok=1", VERDICT_DROP, q_ret)
 is("z2k_autopilot_quic sends 1 ICMPv4 on bad_bypassable+quic_ok=1", 1, #captured_icmp)
 is("ICMPv4 Type 3 Code 3 emitted for bad_bypassable+quic_ok=1", true, captured_icmp[1] ~= nil and captured_icmp[1].pkt:byte(21) == 3 and captured_icmp[1].pkt:byte(22) == 3)
+
+-- 13) stalled_ggc 120s quarantine lifecycle: stall_timer -> LAN SYN fast-fail -> probe unaffected -> usable=1 bypass -> 121s expiry
+local function write_pol_keep_state(u4, u6)
+    local f = assert(io.open(pol_file, "w"))
+    f:write(string.format(
+        "type=header\tversion=1\tupdated=%d\tusable_v4=%d\tusable_v6=%d\tglobal_quic_blocked=0\tpreflight_sni=alt.white.ru\tresyn_delay_ms=140\tpreflight_giveup_ms=1200\tggc_stall_guard_ms=1800\n",
+        math.floor(clock_now), u4, u6
+    ))
+    f:write("type=ip\taddr=10.88.1.10\tkind=isp\tverdict=good_ggc\tquic_ok=0\tstall_ms=1900\n")
+    f:close()
+end
+
+reset_state()
+write_policy({
+    string.format(
+        "type=header\tversion=1\tupdated=%d\tusable_v4=2\tusable_v6=1\tglobal_quic_blocked=0\tpreflight_sni=alt.white.ru\tresyn_delay_ms=140\tpreflight_giveup_ms=1200\tggc_stall_guard_ms=1800",
+        math.floor(clock_now)
+    ),
+    "type=ip\taddr=10.88.1.10\tkind=isp\tverdict=good_ggc\tquic_ok=0\tstall_ms=1900",
+})
+local sg_track = { lua_state = {} }
+local sg_ch = make_tls_ch("rr1---sn-isp.googlevideo.com")
+local sg_sh = "\22\3\3\0\5\2\0\0\1\0"
+local sg_app = "\23\3\3\0\16" .. string.rep("g", 16)
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "tls_client_hello", track = sg_track,
+    dis = tcp4(CLI4, IP_ISP, 47000, 443, TH_ACK + TH_PUSH, 100, 200, sg_ch),
+})
+z2k_autopilot_stall_guard({}, {
+    outgoing = false,
+    l7payload = "tls_server_hello", track = sg_track,
+    dis = tcp4(IP_ISP, CLI4, 443, 47000, TH_ACK + TH_PUSH, 200, 100 + #sg_ch, sg_sh),
+})
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "unknown", track = sg_track,
+    dis = tcp4(CLI4, IP_ISP, 47000, 443, TH_ACK + TH_PUSH, 100 + #sg_ch, 200 + #sg_sh, sg_app),
+})
+local sg_tname, sg_tinfo = find_timer("z2k_sg_")
+is("stall_guard armed timer for stalled ISP GGC", true, sg_tname ~= nil)
+invoke_timer(sg_tname, sg_tinfo)
+is("stall_timer sent bidirectional RST (2 pkts)", 2, #rawsend_dissects)
+
+-- LAN client SYN immediately after stall_timer gets RST,ACK fast-fail (quaratined)
+z2k_autopilot_tcp_fastfail({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    dis = tcp4(CLI4, IP_ISP, 47001, 443, TH_SYN, 500, 0, ""),
+})
+is("quarantined ISP GGC fast-fails subsequent LAN SYN", 3, #rawsend_dissects)
+is("fast-fail packet is RST+ACK", TH_RST + TH_ACK, rawsend_dissects[3].dis.tcp.th_flags)
+
+-- Active gvsub probe to same quarantined IP is NOT fast-failed
+local nf_q = assert(io.open(neu_file, "w"))
+nf_q:write("probe 0a58010a\n")
+nf_q:close()
+clock_now = clock_now + 3
+z2k_autopilot_tcp_fastfail({}, {
+    outgoing = true, ifin = "", ifout = "eth3",
+    dis = tcp4(CLI4, IP_ISP, 47002, 443, TH_SYN, 500, 0, ""),
+})
+is("active gvsub probe bypasses stalled_ggc quarantine", 3, #rawsend_dissects)
+os.remove(neu_file)
+
+-- usable_total == 1 bypasses quarantine (safety: don't RST last working GGC)
+clock_now = clock_now + 10
+write_pol_keep_state(1, 0)
+z2k_autopilot_tcp_fastfail({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    dis = tcp4(CLI4, IP_ISP, 47003, 443, TH_SYN, 500, 0, ""),
+})
+is("usable_total=1 skips stalled_ggc fast-fail", 3, #rawsend_dissects)
+
+-- Restore usable_total=2 inside 120s TTL -> still quarantined
+clock_now = clock_now + 10
+write_pol_keep_state(2, 0)
+z2k_autopilot_tcp_fastfail({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    dis = tcp4(CLI4, IP_ISP, 47004, 443, TH_SYN, 500, 0, ""),
+})
+is("quarantine still active inside 120s window", 4, #rawsend_dissects)
+
+-- Advance past 120s TTL (+121s) -> quarantine expires
+clock_now = clock_now + 121
+write_pol_keep_state(2, 0)
+z2k_autopilot_tcp_fastfail({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    dis = tcp4(CLI4, IP_ISP, 47005, 443, TH_SYN, 500, 0, ""),
+})
+is("stalled_ggc quarantine expires after 121s", 4, #rawsend_dissects)
 
 -- luacheck: ignore 122
 os.time = orig_os_time

@@ -516,9 +516,11 @@ function z2k_preflight(ctx, desync)
 	local st = flows[flow_key(dis, desync.outgoing)]
 	local syn_only = bitand(dis.tcp.th_flags, TH_SYN) ~= 0 and bitand(dis.tcp.th_flags, TH_ACK) == 0
     if not st and syn_only and desync.outgoing then
+        local ap_entry = autopilot_policy(desync)
         if (not desync.ifin or desync.ifin == "")
             and type(rawget(_G, "z2k_autopilot_is_probe_dis")) == "function"
-            and rawget(_G, "z2k_autopilot_is_probe_dis")(dis, desync.arg) then
+            and rawget(_G, "z2k_autopilot_is_probe_dis")(dis, desync.arg)
+            and (not ap_entry or ap_entry.kind ~= "google") then
             DLOG("z2k_preflight: bypass active gvsub probe")
             instance_cutoff_shim(ctx, desync)
             return
@@ -527,7 +529,6 @@ function z2k_preflight(ctx, desync)
             instance_cutoff_shim(ctx, desync)
             return
         end
-        local ap_entry = autopilot_policy(desync)
         if ap_entry and (ap_entry.kind ~= "google"
             or ap_entry.verdict == "good_direct"
             or ap_entry.verdict == "good_ggc") then
