@@ -522,6 +522,10 @@ local function is_probe_guard_dis(dis, arg)
     return probes ~= nil and probes[hex] == true
 end
 
+function z2k_autopilot_is_probe_dis(dis, arg)
+    return is_probe_guard_dis(dis, arg)
+end
+
 function z2k_autopilot_safety_fuse(header)
     if not header then return false end
     return ((header.usable_v4 or 0) + (header.usable_v6 or 0)) >= 1
@@ -814,7 +818,11 @@ function z2k_autopilot_quic(ctx, desync)
     end
 
     if is_gv_target and arg.yt ~= "0" then
-        if entry and entry.quic_ok == 1 then
+        if entry and entry.quic_ok == 1
+            and entry.verdict ~= "bad_bypassable"
+            and entry.verdict ~= "bad_unbypassable"
+            and entry.verdict ~= "dead_l3"
+            and entry.verdict ~= "dead_ggc" then
             return
         end
         dlog("z2k_autopilot_quic: reject QUIC Initial without quic_ok=1")

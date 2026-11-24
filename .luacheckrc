@@ -25,7 +25,7 @@ globals = {
     "z2k_autopilot_stall_guard", "z2k_autopilot_stall_timer", "z2k_autopilot_observe",
     "z2k_autopilot_reset", "z2k_autopilot_set_paths", "z2k_autopilot_parse_ip", "z2k_autopilot_mask_prefix",
     "z2k_autopilot_lookup_raw", "z2k_autopilot_lookup_dis", "z2k_autopilot_lookup_text",
-    "z2k_autopilot_safety_fuse",
+    "z2k_autopilot_safety_fuse", "z2k_autopilot_is_probe_dis",
     -- Поправки к штатному детектору неудач (files/lua/z2k-alert.lua) и
     -- детектор молчания QUIC (files/lua/z2k-quic-silence.lua). Движок ищет и
     -- детектор, и таймер-функцию по имени в _G.

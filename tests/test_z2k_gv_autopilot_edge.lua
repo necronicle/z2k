@@ -1,5 +1,5 @@
 -- Edge-case regression tests for z2k-gv-autopilot + z2k-preflight v2.0
--- luacheck: globals DLOG bitand u32 u32add seq_ge bu8 bu32 find_tcp_option deepcopy blob tls_mod resolve_multi_pos delete_pos_1 rawsend_dissect rawsend reconstruct_dissect instance_cutoff_shim execution_plan_cancel direction_cutoff_opposite payload_check replay_first clock_getfloattime timer_set timer_del VERDICT_DROP VERDICT_PASS VERDICT_MODIFY TH_FIN TH_SYN TH_RST TH_PUSH TH_ACK TCP_KIND_NOOP TCP_KIND_MSS TCP_KIND_SCALE TCP_KIND_TS z2k_preflight z2k_preflight_giveup_timer z2k_autopilot_observe z2k_autopilot_stall_guard z2k_autopilot_stall_timer z2k_autopilot_reset z2k_autopilot_set_paths
+-- luacheck: globals DLOG bitand u32 u32add seq_ge bu8 bu32 find_tcp_option deepcopy blob tls_mod resolve_multi_pos delete_pos_1 rawsend_dissect rawsend reconstruct_dissect instance_cutoff_shim execution_plan_cancel direction_cutoff_opposite payload_check replay_first clock_getfloattime timer_set timer_del VERDICT_DROP VERDICT_PASS VERDICT_MODIFY TH_FIN TH_SYN TH_RST TH_PUSH TH_ACK TCP_KIND_NOOP TCP_KIND_MSS TCP_KIND_SCALE TCP_KIND_TS z2k_preflight z2k_preflight_giveup_timer z2k_autopilot_quic z2k_autopilot_observe z2k_autopilot_stall_guard z2k_autopilot_stall_timer z2k_autopilot_is_probe_dis z2k_autopilot_reset z2k_autopilot_set_paths
 -- luacheck: ignore 122
 
 local ROOT = arg and arg[0] and arg[0]:match("^(.*)/tests/[^/]+$") or "."
@@ -873,9 +873,82 @@ is("stall guard marks done at bidir connskip boundary", true, track_bidir_cancel
 invoke_timer(tn_bc, ti_bc)
 is("stale timer after bidir connskip boundary cancel sends 0 RSTs", 0, #rawsend_dissects)
 
+-- 12. Preflight ISP/probe bypass + QUIC bad_bypassable defense-in-depth
+local IP_ISP_SLOW = ip4_bytes(10, 88, 1, 11)
+local IP_BAD_QUIC = ip4_bytes(203, 0, 113, 56)
+write_policy({
+    string.format(
+        "type=header\tversion=1\tupdated=%d\tusable_v4=1\tusable_v6=1\tglobal_quic_blocked=0\tpreflight_sni=alt.white.ru\tresyn_delay_ms=140\tpreflight_giveup_ms=1200\tggc_stall_guard_ms=1800",
+        clock_now
+    ),
+    "type=ip\taddr=10.88.1.11\tkind=isp\tverdict=bad_bypassable\tquic_ok=0\tstall_ms=1900",
+    "type=ip\taddr=203.0.113.55\tkind=google\tverdict=bad_bypassable\tquic_ok=0\tpreflight_sni=alt.white.ru\tresyn_delay_ms=140\tgiveup_ms=1200",
+    "type=ip\taddr=203.0.113.56\tkind=google\tverdict=bad_bypassable\tquic_ok=1",
+})
+
+-- 12a) ISP bad_bypassable bypasses z2k_preflight immediately
+reset_state()
+z2k_preflight({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    dis = tcp4(CLI4, IP_ISP_SLOW, 46100, 443, TH_SYN, 1000, 0, ""),
+    arg = { timeout = 4 },
+})
+is("preflight bypasses isp bad_bypassable (cutoff)", 1, cutoffs)
+is("preflight bypasses isp bad_bypassable (0 timers)", nil, next(timers))
+
+-- 12b) Active gvsub probe (.neutral probe cb007137, ifin="") bypasses preflight; LAN (ifin="br0") enters probe_syn
+reset_state()
+local nf_pf = assert(io.open(neu_file, "w"))
+nf_pf:write("probe cb007137\n")
+nf_pf:close()
+z2k_autopilot_set_paths(pol_file, obs_file, neu_file)
+z2k_preflight({}, {
+    outgoing = true, ifin = "", ifout = "eth3",
+    dis = tcp4(CLI4, IP_BAD_BYP, 46101, 443, TH_SYN, 1100, 0, ""),
+    arg = { timeout = 4 },
+})
+is("preflight bypasses active gvsub probe (ifin empty)", 1, cutoffs)
+is("preflight active probe spawns 0 timers", nil, next(timers))
+
+z2k_preflight({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    dis = tcp4(CLI4, IP_BAD_BYP, 46102, 443, TH_SYN, 1200, 0, ""),
+    arg = { timeout = 4 },
+})
+local g_lan, _ = find_timer("z2k_pf_giveup_")
+is("LAN client during active probe still enters preflight", true, g_lan ~= nil)
+
+-- 12c) bad_bypassable with quic_ok=1 is still rejected via ICMP Port Unreachable in z2k_autopilot_quic
+reset_state()
+local orig_rawsend = rawsend
+local captured_icmp = {}
+-- luacheck: ignore 122
+rawsend = function(pkt, opts)
+    captured_icmp[#captured_icmp + 1] = { pkt = pkt, opts = opts }
+    return true
+end
+local d_quic_bad = {
+    outgoing = true,
+    ifin = "br0",
+    l7payload = "quic_initial",
+    track = { hostname = "rr1---sn-test.googlevideo.com" },
+    dis = {
+        ip = { ip_src = CLI4, ip_dst = IP_BAD_QUIC, ip_p = 17, ip_v = 4, ip_hl = 5, ip_ttl = 64 },
+        udp = { uh_sport = 52000, uh_dport = 443 },
+        payload = "\192",
+    },
+}
+local q_ret = z2k_autopilot_quic({}, d_quic_bad)
+-- luacheck: ignore 122
+rawsend = orig_rawsend
+is("z2k_autopilot_quic drops bad_bypassable even if quic_ok=1", VERDICT_DROP, q_ret)
+is("z2k_autopilot_quic sends 1 ICMPv4 on bad_bypassable+quic_ok=1", 1, #captured_icmp)
+is("ICMPv4 Type 3 Code 3 emitted for bad_bypassable+quic_ok=1", true, captured_icmp[1] ~= nil and captured_icmp[1].pkt:byte(21) == 3 and captured_icmp[1].pkt:byte(22) == 3)
+
 -- luacheck: ignore 122
 os.time = orig_os_time
 os.remove(pol_file)
 os.remove(obs_file)
+os.remove(neu_file)
 io.write(string.format("\nPASSED: %d\nFAILED: %d\n", PASS, FAIL))
 os.exit(FAIL == 0 and 0 or 1)
