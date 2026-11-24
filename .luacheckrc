@@ -35,6 +35,7 @@ globals = {
     "cond_tcp_has_ts",
     "automate_host_record",
     "circular_report_failure",
+    "circular_rotate",
     "circular",
     -- Сброс накопленных счётчиков удач/неудач хоста. Предусмотрен движком
     -- ровно для нашего случая: состояние ротации меняет не детектор, а человек
@@ -109,9 +110,10 @@ read_globals = {
     -- Отмена инстансов дальше по профилю на время пробы (nfqws2 core).
     "execution_plan_cancel",
 
-    -- nfqws2 detectors
+    -- nfqws2 detectors and circular generation helpers (zapret-auto.lua)
     "standard_failure_detector",
     "standard_success_detector",
+    "circular_sync_generation",
 
     -- zapret-antidpi.lua desync primitives (defined upstream, used by
     -- z2k-dynamic-strategy.lua dispatch table)

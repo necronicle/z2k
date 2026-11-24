@@ -2738,32 +2738,89 @@ z2k_policy_connmark_start()
     fi
     echo "Policy '$POLICY_NAME' ($pid): $members member host(s)."
 
-    local pol_rule=""
+    local excl_rule="-m mark --mark $Z2K_POLICY_MARK -j CONNMARK --set-xmark $Z2K_CONNMARK_EXCLUDE"
+    local incl_rule="-m mark ! --mark $Z2K_POLICY_MARK -j CONNMARK --set-xmark $Z2K_CONNMARK_EXCLUDE"
+    local desync_mark="${DESYNC_MARK:-0x40000000}"
+    case "$desync_mark" in
+        */*) ;;
+        *) desync_mark="${desync_mark}/${desync_mark}" ;;
+    esac
     if [ "$POLICY_EXCLUDE" = "1" ]; then
         echo "Found policy '$POLICY_NAME'. Traffic from it will be excluded from processing."
-        pol_rule="-m mark --mark $Z2K_POLICY_MARK -j CONNMARK --set-xmark $Z2K_CONNMARK_EXCLUDE"
     else
         echo "Found policy '$POLICY_NAME'. Only traffic from it will be processed."
-        pol_rule="-m mark ! --mark $Z2K_POLICY_MARK -j CONNMARK --set-xmark $Z2K_CONNMARK_EXCLUDE"
     fi
 
     local wan iface
     wan="$(get_wan_ifaces4)"
     [ -n "$wan" ] || return 0
 
-    for iface in $wan; do
-        # Exclude connections outside policy by setting CONNMARK bit before NFQUEUE rules.
-        iptablesw -t mangle -C POSTROUTING -o "$iface" $pol_rule || iptablesw -t mangle -I POSTROUTING -o "$iface" $pol_rule
-    done
+    if [ "$POLICY_EXCLUDE" = "1" ]; then
+        for iface in $wan; do
+            while iptablesw -t mangle -C POSTROUTING -o "$iface" -j Z2K_POL 2>/dev/null; do
+                iptablesw -t mangle -D POSTROUTING -o "$iface" -j Z2K_POL 2>/dev/null || break
+            done
+            while iptablesw -t mangle -C POSTROUTING -o "$iface" $incl_rule 2>/dev/null; do
+                iptablesw -t mangle -D POSTROUTING -o "$iface" $incl_rule 2>/dev/null || break
+            done
+            # Exclude connections in policy by setting CONNMARK bit before NFQUEUE rules.
+            iptablesw -t mangle -C POSTROUTING -o "$iface" $excl_rule || iptablesw -t mangle -I POSTROUTING -o "$iface" $excl_rule
+        done
+        iptablesw -t mangle -F Z2K_POL 2>/dev/null || :
+        iptablesw -t mangle -X Z2K_POL 2>/dev/null || :
+    else
+        # iptables запрещает два совпадения `-m mark` в одном правиле, поэтому
+        # режим включения вынесен в выделенную цепочку Z2K_POL: сначала RETURN для
+        # пакетов с DESYNC_MARK (включая зонды контура C1), затем CONNMARK-исключение.
+        iptablesw -t mangle -N Z2K_POL 2>/dev/null || :
+        iptablesw -t mangle -F Z2K_POL 2>/dev/null || :
+        iptablesw -t mangle -A Z2K_POL -m mark --mark "$desync_mark" -j RETURN
+        iptablesw -t mangle -A Z2K_POL -m mark ! --mark "$Z2K_POLICY_MARK" -j CONNMARK --set-xmark "$Z2K_CONNMARK_EXCLUDE"
+        for iface in $wan; do
+            while iptablesw -t mangle -C POSTROUTING -o "$iface" $incl_rule 2>/dev/null; do
+                iptablesw -t mangle -D POSTROUTING -o "$iface" $incl_rule 2>/dev/null || break
+            done
+            while iptablesw -t mangle -C POSTROUTING -o "$iface" $excl_rule 2>/dev/null; do
+                iptablesw -t mangle -D POSTROUTING -o "$iface" $excl_rule 2>/dev/null || break
+            done
+            iptablesw -t mangle -C POSTROUTING -o "$iface" -j Z2K_POL 2>/dev/null || \
+                iptablesw -t mangle -I POSTROUTING -o "$iface" -j Z2K_POL
+        done
+    fi
 
     [ "$Z2K_CONNMARK_OK6" = "1" ] || return 0
 
     wan="$(get_wan_ifaces6)"
     [ -n "$wan" ] || return 0
 
-    for iface in $wan; do
-        ip6tablesw -t mangle -C POSTROUTING -o "$iface" $pol_rule || ip6tablesw -t mangle -I POSTROUTING -o "$iface" $pol_rule
-    done
+    if [ "$POLICY_EXCLUDE" = "1" ]; then
+        for iface in $wan; do
+            while ip6tablesw -t mangle -C POSTROUTING -o "$iface" -j Z2K_POL 2>/dev/null; do
+                ip6tablesw -t mangle -D POSTROUTING -o "$iface" -j Z2K_POL 2>/dev/null || break
+            done
+            while ip6tablesw -t mangle -C POSTROUTING -o "$iface" $incl_rule 2>/dev/null; do
+                ip6tablesw -t mangle -D POSTROUTING -o "$iface" $incl_rule 2>/dev/null || break
+            done
+            ip6tablesw -t mangle -C POSTROUTING -o "$iface" $excl_rule || ip6tablesw -t mangle -I POSTROUTING -o "$iface" $excl_rule
+        done
+        ip6tablesw -t mangle -F Z2K_POL 2>/dev/null || :
+        ip6tablesw -t mangle -X Z2K_POL 2>/dev/null || :
+    else
+        ip6tablesw -t mangle -N Z2K_POL 2>/dev/null || :
+        ip6tablesw -t mangle -F Z2K_POL 2>/dev/null || :
+        ip6tablesw -t mangle -A Z2K_POL -m mark --mark "$desync_mark" -j RETURN
+        ip6tablesw -t mangle -A Z2K_POL -m mark ! --mark "$Z2K_POLICY_MARK" -j CONNMARK --set-xmark "$Z2K_CONNMARK_EXCLUDE"
+        for iface in $wan; do
+            while ip6tablesw -t mangle -C POSTROUTING -o "$iface" $incl_rule 2>/dev/null; do
+                ip6tablesw -t mangle -D POSTROUTING -o "$iface" $incl_rule 2>/dev/null || break
+            done
+            while ip6tablesw -t mangle -C POSTROUTING -o "$iface" $excl_rule 2>/dev/null; do
+                ip6tablesw -t mangle -D POSTROUTING -o "$iface" $excl_rule 2>/dev/null || break
+            done
+            ip6tablesw -t mangle -C POSTROUTING -o "$iface" -j Z2K_POL 2>/dev/null || \
+                ip6tablesw -t mangle -I POSTROUTING -o "$iface" -j Z2K_POL
+        done
+    fi
 }
 
 z2k_policy_connmark_stop()
@@ -2771,24 +2828,43 @@ z2k_policy_connmark_stop()
     z2k_fw_is_iptables || return 0
     [ "$Z2K_CONNMARK_OK4" = "1" ] || return 0
 
-    z2k_detect_policy_mark || return 0
-
-    local pol_rule=""
-    if [ "$POLICY_EXCLUDE" = "1" ]; then
-        pol_rule="-m mark --mark $Z2K_POLICY_MARK -j CONNMARK --set-xmark $Z2K_CONNMARK_EXCLUDE"
-    else
-        pol_rule="-m mark ! --mark $Z2K_POLICY_MARK -j CONNMARK --set-xmark $Z2K_CONNMARK_EXCLUDE"
-    fi
-
     local wan iface
     wan="$(get_wan_ifaces4)"
-    [ -n "$wan" ] || return 0
-
     for iface in $wan; do
-        while iptablesw -t mangle -C POSTROUTING -o "$iface" $pol_rule 2>/dev/null; do
-            iptablesw -t mangle -D POSTROUTING -o "$iface" $pol_rule || break
+        while iptablesw -t mangle -C POSTROUTING -o "$iface" -j Z2K_POL 2>/dev/null; do
+            iptablesw -t mangle -D POSTROUTING -o "$iface" -j Z2K_POL || break
         done
     done
+    iptablesw -t mangle -F Z2K_POL 2>/dev/null || :
+    iptablesw -t mangle -X Z2K_POL 2>/dev/null || :
+
+    if [ "$Z2K_CONNMARK_OK6" = "1" ]; then
+        wan="$(get_wan_ifaces6)"
+        for iface in $wan; do
+            while ip6tablesw -t mangle -C POSTROUTING -o "$iface" -j Z2K_POL 2>/dev/null; do
+                ip6tablesw -t mangle -D POSTROUTING -o "$iface" -j Z2K_POL || break
+            done
+        done
+        ip6tablesw -t mangle -F Z2K_POL 2>/dev/null || :
+        ip6tablesw -t mangle -X Z2K_POL 2>/dev/null || :
+    fi
+
+    z2k_detect_policy_mark || return 0
+
+    local excl_rule="-m mark --mark $Z2K_POLICY_MARK -j CONNMARK --set-xmark $Z2K_CONNMARK_EXCLUDE"
+    local incl_rule="-m mark ! --mark $Z2K_POLICY_MARK -j CONNMARK --set-xmark $Z2K_CONNMARK_EXCLUDE"
+
+    wan="$(get_wan_ifaces4)"
+    if [ -n "$wan" ]; then
+        for iface in $wan; do
+            while iptablesw -t mangle -C POSTROUTING -o "$iface" $excl_rule 2>/dev/null; do
+                iptablesw -t mangle -D POSTROUTING -o "$iface" $excl_rule || break
+            done
+            while iptablesw -t mangle -C POSTROUTING -o "$iface" $incl_rule 2>/dev/null; do
+                iptablesw -t mangle -D POSTROUTING -o "$iface" $incl_rule || break
+            done
+        done
+    fi
 
     [ "$Z2K_CONNMARK_OK6" = "1" ] || return 0
 
@@ -2796,8 +2872,11 @@ z2k_policy_connmark_stop()
     [ -n "$wan" ] || return 0
 
     for iface in $wan; do
-        while ip6tablesw -t mangle -C POSTROUTING -o "$iface" $pol_rule 2>/dev/null; do
-            ip6tablesw -t mangle -D POSTROUTING -o "$iface" $pol_rule || break
+        while ip6tablesw -t mangle -C POSTROUTING -o "$iface" $excl_rule 2>/dev/null; do
+            ip6tablesw -t mangle -D POSTROUTING -o "$iface" $excl_rule || break
+        done
+        while ip6tablesw -t mangle -C POSTROUTING -o "$iface" $incl_rule 2>/dev/null; do
+            ip6tablesw -t mangle -D POSTROUTING -o "$iface" $incl_rule || break
         done
     done
 }
@@ -3414,6 +3493,7 @@ z2k_sweep_stale_wan_nfqueue()
                 if($2=="Z2K_MSS") {gsub(/"/, ""); print; next}
                 for(i=1;i<NF;i++) {
                     if($2=="FORWARD" && $i=="-j" && $(i+1)=="Z2K_MSS") {print; break}
+                    if($2=="POSTROUTING" && $i=="-j" && $(i+1)=="Z2K_POL") {print; break}
                     if($i=="--queue-num" && $(i+1)==q) {print; break}
                     if($2=="FORWARD" && $i=="--comment" && $(i+1) ~ /^"?z2k-inbound-mss"?$/) {
                         gsub(/"/, "", $(i+1)); print; break
@@ -3447,9 +3527,10 @@ z2k_sweep_orphan_nfqueue()
         command -v "$save" >/dev/null 2>&1 || continue
         "$save" -t mangle 2>/dev/null | awk -v q="$qn" '
             $1=="-A" {
-                if($2=="Z2K_MSS") {gsub(/"/, ""); print; next}
+                if($2=="Z2K_MSS" || $2=="Z2K_POL") {gsub(/"/, ""); print; next}
                 for(i=1;i<NF;i++) {
                     if($2=="FORWARD" && $i=="-j" && $(i+1)=="Z2K_MSS") {print; break}
+                    if($2=="POSTROUTING" && $i=="-j" && $(i+1)=="Z2K_POL") {print; break}
                     if($i=="--queue-num" && $(i+1)==q) {print; break}
                     if($2=="FORWARD" && $i=="--comment" && $(i+1) ~ /^"?z2k-inbound-mss"?$/) {
                         gsub(/"/, "", $(i+1)); print; break
@@ -3466,6 +3547,8 @@ z2k_sweep_orphan_nfqueue()
         done
         "$restore" -w -t mangle -F Z2K_MSS 2>/dev/null || :
         "$restore" -w -t mangle -X Z2K_MSS 2>/dev/null || :
+        "$restore" -w -t mangle -F Z2K_POL 2>/dev/null || :
+        "$restore" -w -t mangle -X Z2K_POL 2>/dev/null || :
     done
     return 0
 }

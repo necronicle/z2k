@@ -60,10 +60,91 @@ H.test('RST with payload does not authenticate its own TTL',function()
     local d=H.tcp(nil,false,1,'injected'); d.dis.tcp.th_flags=TH_RST+TH_ACK
     local h,c=H.step(d); H.eq(true,c.failure); H.eq(1,h.failure_counter)
 end)
-H.test('server-matching TTL cannot veto an early RST',function()
-    local d=H.tcp(nil,false,1,H.hello,'tls_server_hello'); H.step(d)
-    local rst=H.tcp(d.track,false,#H.hello+1,''); rst.dis.tcp.th_flags=TH_RST+TH_ACK
+H.test('server-matching TTL cannot veto an early RST before ServerHello',function()
+    -- Серверный TTL на другом соединении не даёт иммунитета от раннего RST до ServerHello.
+    H.step(H.tcp(nil,false,1,H.hello,'tls_server_hello'))
+    local rst=H.tcp(nil,false,1,''); rst.dis.tcp.th_flags=TH_RST+TH_ACK
     local _,c=H.step(rst); H.eq(true,c.failure)
+end)
+H.test('RST after verified ServerHello is neutral and does not rotate',function()
+    for _, key in ipairs({'rkn_tcp', 'yt_tcp', 'gv_tcp'}) do
+        local t=H.track(key..'.example')
+        local d=H.tcp(t,false,1,H.hello,'tls_server_hello'); d.arg.key=key
+        local h=H.step(d); h.failure_counter=2
+        local rst=H.tcp(t,false,#H.hello+1,''); rst.arg.key=key; rst.dis.tcp.th_flags=TH_RST+TH_ACK
+        local _,c=H.step(rst)
+        H.eq(true,c.neutral); H.eq(nil,c.failure); H.eq(2,h.failure_counter); H.eq(1,h.nstrategy)
+    end
+end)
+local function tls_rec(kind, len, fill)
+    local hi=math.floor(len/256); local lo=len%256
+    return string.char(kind,3,3,hi,lo)..string.rep(fill or 'a', len)
+end
+H.test('short verified TLS (< inseq) succeeds after ServerHello + >= 1024B Application Data',function()
+    -- 1) Коалесцированный пакет: ServerHello + CCS + 1024B AppData (<4096)
+    local t1=H.track('short-coalesced.example')
+    local d1=H.tcp(t1,true,1,H.client,'tls_client_hello'); local h1=H.step(d1); h1.failure_counter=2
+    local burst=H.hello..tls_rec(20,1,'\1')..tls_rec(23,1024)
+    local _,c1=H.step(H.tcp(t1,false,1,burst,'tls_server_hello'))
+    H.eq(true,c1.nocheck); H.eq(nil,c1.neutral); H.eq(nil,c1.failure); H.eq(nil,h1.failure_counter)
+
+    -- 2) Дробление на несколько пакетов и записей (<4096): 600B (недостаточно) -> +500B (>=1024, успех)
+    local t2=H.track('short-multi.example')
+    local d2=H.tcp(t2,true,1,H.client,'tls_client_hello'); local h2=H.step(d2); h2.failure_counter=2
+    H.step(H.tcp(t2,false,1,H.hello,'tls_server_hello'))
+    local p1=tls_rec(20,1,'\1')..tls_rec(23,600)
+    local _,c2=H.step(H.tcp(t2,false,#H.hello+1,p1))
+    H.eq(nil,c2.nocheck); H.eq(2,h2.failure_counter)
+    local p2=tls_rec(23,500)
+    H.step(H.tcp(t2,false,#H.hello+#p1+1,p2))
+    H.eq(true,c2.nocheck); H.eq(nil,c2.neutral); H.eq(nil,h2.failure_counter)
+
+    -- 3) Частично дошедшая крупная запись AppData (len=3000, пришло 1100B < 4096)
+    local t3=H.track('short-partial.example')
+    local d3=H.tcp(t3,true,1,H.client,'tls_client_hello'); local h3=H.step(d3); h3.failure_counter=1
+    H.step(H.tcp(t3,false,1,H.hello,'tls_server_hello'))
+    local hdr=string.char(0x17,3,3,0x0b,0xb8)..string.rep('z',1100)
+    local _,c3=H.step(H.tcp(t3,false,#H.hello+1,hdr))
+    H.eq(true,c3.nocheck); H.eq(nil,h3.failure_counter)
+
+    -- 4) Короткое закрытие с FIN+PSH+ACK на >=1024B AppData всё равно засчитывает успех
+    local t4=H.track('short-fin-data.example')
+    local h4=H.step(H.tcp(t4,true,1,H.client,'tls_client_hello')); h4.failure_counter=2
+    H.step(H.tcp(t4,false,1,H.hello,'tls_server_hello'))
+    local fin_app=H.tcp(t4,false,#H.hello+1,tls_rec(23,1100))
+    fin_app.dis.tcp.th_flags=TH_FIN+TH_PUSH+TH_ACK
+    local _,c4=H.step(fin_app)
+    H.eq(true,c4.nocheck); H.eq(nil,c4.neutral); H.eq(nil,h4.failure_counter)
+
+    -- 5) Out-of-order AppData до ServerHello буферизуется и подтверждается после прихода ServerHello
+    local t5=H.track('short-ooo.example')
+    local h5=H.step(H.tcp(t5,true,1,H.client,'tls_client_hello')); h5.failure_counter=2
+    local _,c5=H.step(H.tcp(t5,false,#H.hello+1,tls_rec(23,1100)))
+    H.eq(nil,c5.nocheck); H.eq(2,h5.failure_counter)
+    H.step(H.tcp(t5,false,1,H.hello,'tls_server_hello'))
+    H.eq(true,c5.nocheck); H.eq(nil,c5.neutral); H.eq(nil,h5.failure_counter)
+end)
+H.test('short AppData < 1024B, abbreviated TLS 1.2 without ServerHello, and post-SH alert stay guarded',function()
+    -- < 1024B AppData + RST: не сбрасывает failure_counter и не падает
+    local t1=H.track('too-short.example')
+    local h1=H.step(H.tcp(t1,true,1,H.client,'tls_client_hello')); h1.failure_counter=2
+    H.step(H.tcp(t1,false,1,H.hello..tls_rec(23,300),'tls_server_hello'))
+    H.eq(2,h1.failure_counter)
+    local rst=H.tcp(t1,false,#H.hello+306,''); rst.dis.tcp.th_flags=TH_RST+TH_ACK
+    local _,c1=H.step(rst); H.eq(true,c1.neutral); H.eq(2,h1.failure_counter)
+
+    -- TLS 1.2 abbreviated handshake: ChangeCipherSpec/AppData без ServerHello -> neutral
+    local t2=H.track('abbr12.example')
+    local h2=H.step(H.tcp(t2,true,1,H.client,'tls_client_hello')); h2.failure_counter=2
+    local _,c2=H.step(H.tcp(t2,false,1,tls_rec(20,1,'\1')..tls_rec(23,1500)))
+    H.eq(true,c2.neutral); H.eq(2,h2.failure_counter)
+
+    -- Алерт после ServerHello закрывает проверку и не даёт засчитать успех по последующим байтам AppData
+    local t3=H.track('alert-then-app.example')
+    local h3=H.step(H.tcp(t3,true,1,H.client,'tls_client_hello')); h3.failure_counter=2
+    H.step(H.tcp(t3,false,1,H.hello,'tls_server_hello'))
+    local _,c3=H.step(H.tcp(t3,false,#H.hello+1,H.alert..tls_rec(23,1200)))
+    H.eq(true,c3.neutral); H.eq(nil,c3.failure); H.eq(2,h3.failure_counter)
 end)
 H.test('zero-window probes do not rotate the host',function()
     local d=H.tcp(nil,false,1,H.hello,'tls_server_hello'); H.step(d)

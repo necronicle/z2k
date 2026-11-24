@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/binary"
 	"net"
+	"net/netip"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -404,5 +406,81 @@ func TestProbeSeesAddressBlock(t *testing.T) {
 	res := runAgainst(t, box, "example.org")
 	if res.Verdict != VerdictAddress {
 		t.Fatalf("вердикт %q (%s), ожидался %q", res.Verdict, res.Reason, VerdictAddress)
+	}
+}
+
+func TestProbeInitialIPv4AndControlAndRejectsVersionNeg(t *testing.T) {
+	box := newFakeBox(t, "blocked.example")
+	ap := netip.MustParseAddrPort(box.addr())
+
+	var controlCalled bool
+	ctrl := func(network, address string, c syscall.RawConn) error {
+		controlCalled = true
+		return nil
+	}
+	resp, rtt, err := ProbeInitial(context.Background(), ap, "ok.example", ctrl, time.Second)
+	if err != nil {
+		t.Fatalf("ProbeInitial IPv4 unexpected err: %v", err)
+	}
+	if !controlCalled {
+		t.Fatal("ProbeInitial did not invoke custom control callback")
+	}
+	if resp.Kind != KindInitial || rtt < 0 {
+		t.Fatalf("ProbeInitial resp=%+v rtt=%s", resp, rtt)
+	}
+
+	// Заблокированный SNI -> тишина -> ошибка по таймауту.
+	if _, _, err := ProbeInitial(context.Background(), ap, "blocked.example", nil, 150*time.Millisecond); err == nil {
+		t.Fatal("expected error for silent blocked SNI")
+	}
+
+	// Сервер, присылающий Version Negotiation вместо Server Initial/Retry, НЕ принимается!
+	vnSrv, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer vnSrv.Close()
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, from, err := vnSrv.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			(&fakeBox{conn: vnSrv}).sendVersionNegotiation(buf[:n], from)
+		}
+	}()
+	vnAP := netip.MustParseAddrPort(vnSrv.LocalAddr().String())
+	if _, _, err := ProbeInitial(context.Background(), vnAP, "ok.example", nil, 200*time.Millisecond); err == nil {
+		t.Fatal("ProbeInitial must reject Version Negotiation and only accept Initial/Retry")
+	}
+}
+
+func TestProbeInitialAndRunIPv6(t *testing.T) {
+	c, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback})
+	if err != nil {
+		t.Skipf("IPv6 loopback unavailable: %v", err)
+	}
+	box := &fakeBox{t: t, blocked: "blocked6.example", answerInitial: true, conn: c, seen: map[string]bool{}}
+	go box.serve()
+	t.Cleanup(func() { _ = c.Close() })
+
+	ap := netip.MustParseAddrPort(box.addr())
+	resp, _, err := ProbeInitial(context.Background(), ap, "rr1---sn-test.googlevideo.com", nil, time.Second)
+	if err != nil {
+		t.Fatalf("ProbeInitial IPv6 failed: %v", err)
+	}
+	if resp.Kind != KindInitial {
+		t.Fatalf("ProbeInitial IPv6 Kind=%q, want %q", resp.Kind, KindInitial)
+	}
+
+	// Проверяем также Run с opt.Addr на IPv6.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res := Run(ctx, "blocked6.example", Options{
+		Addr: box.addr(), Repeats: 2, Timeout: 250 * time.Millisecond, AllowLoopback: true, Parallel: 2,
+	})
+	if res.Verdict != VerdictContent {
+		t.Fatalf("Run IPv6 verdict=%q (%s), want %q", res.Verdict, res.Reason, VerdictContent)
 	}
 }
