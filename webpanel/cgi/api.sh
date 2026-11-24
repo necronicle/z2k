@@ -121,6 +121,125 @@ au_schedule_json() {
     printf ',"au_hour":';    json_string "$_h"
 }
 
+autopilot_status_json() {
+    local gvsub_sr2="${1:-1}"
+    local gvsub_enabled=true
+    case "$gvsub_sr2" in 0|off) gvsub_enabled=false ;; esac
+    local pol_file="${Z2K_GV_POLICY_FILE:-/tmp/z2k-gv-policy.dat}"
+    local obs_file="${Z2K_GV_OBSERVED_FILE:-/tmp/z2k-gv-observed.tsv}"
+    local gvsub_file="${Z2K_GVSUB_STATUS_FILE:-/tmp/z2k-gvsub.json}"
+    local gvsub_present=false
+    [ -s "$gvsub_file" ] && gvsub_present=true
+
+    local obs_count=0
+    if [ -s "$obs_file" ]; then
+        obs_count=$(awk 'NF && $1 !~ /^#/ { c++ } END { printf "%.0f", c + 0 }' "$obs_file" 2>/dev/null || echo 0)
+        case "$obs_count" in ''|*[!0-9]*) obs_count=0 ;; esac
+    fi
+
+    local pol_stats="" pol_sni=""
+    if [ -s "$pol_file" ]; then
+        pol_stats=$(awk -F'\t' '
+            function num(v) {
+                if (v ~ /^[0-9]+$/ && length(v) <= 12) return v + 0
+                return 0
+            }
+            BEGIN {
+                pol_ok=0; upd=0; stale=0; v4=0; v6=0; brtt=0; grtt=0; gqb=0
+                resyn=0; giveup=0; stall=0
+                ips=0; pfxs=0; isp_good=0; isp_dead=0
+                g_good=0; g_byp=0; g_unbyp=0; g_dead=0; qok=0; play=0
+                sni=""
+            }
+            {
+                for (k in f) delete f[k]
+                for (i = 1; i <= NF; i++) {
+                    eq = index($i, "=")
+                    if (eq > 0) {
+                        k = substr($i, 1, eq - 1)
+                        v = substr($i, eq + 1)
+                        f[k] = v
+                    }
+                }
+                t = f["type"]
+                if (t == "header") {
+                    pol_ok = 1
+                    upd = num(f["updated"])
+                    stale = (num(f["stale"]) > 0 ? 1 : 0)
+                    v4 = num(f["usable_v4"])
+                    v6 = num(f["usable_v6"])
+                    brtt = num(f["baseline_rtt_ms"])
+                    grtt = num(f["ggc_rtt_ms"])
+                    gqb = (num(f["global_quic_blocked"]) > 0 ? 1 : 0)
+                    resyn = num(f["resyn_delay_ms"])
+                    giveup = num(f["preflight_giveup_ms"])
+                    stall = num(f["ggc_stall_guard_ms"])
+                    sni = f["preflight_sni"]
+                    gsub(/\r|\n/, "", sni)
+                } else if (t == "prefix") {
+                    pfxs++
+                } else if (t == "ip") {
+                    ips++
+                    k = f["kind"]
+                    ver = f["verdict"]
+                    if (num(f["quic_ok"]) > 0) qok++
+                    if (k == "isp") {
+                        if (ver == "good_ggc" || ver == "good_direct") isp_good++
+                        else if (ver == "dead_l3" || ver == "dead_ggc") isp_dead++
+                    } else if (k == "google") {
+                        if (ver == "good_direct" || ver == "good_ggc") g_good++
+                        else if (ver == "bad_bypassable") g_byp++
+                        else if (ver == "bad_unbypassable") g_unbyp++
+                        else if (ver == "dead_l3" || ver == "dead_ggc") g_dead++
+                    } else if (k == "play") {
+                        play++
+                    }
+                }
+            }
+            END {
+                fuse = (pol_ok && (v4 + v6 >= 1)) ? 1 : 0
+                printf "%.0f %.0f %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n%s\n", \
+                    pol_ok, upd, stale, v4, v6, brtt, grtt, gqb, resyn, giveup, stall, fuse, \
+                    ips, pfxs, isp_good, isp_dead, g_good, g_byp, g_unbyp, g_dead, qok, play, sni
+            }
+        ' "$pol_file" 2>/dev/null) || pol_stats=""
+    fi
+
+    local p_ok=0 p_upd=0 p_stale=0 p_v4=0 p_v6=0 p_brtt=0 p_grtt=0 p_gqb=0
+    local p_resyn=0 p_giveup=0 p_stall=0 p_fuse=0 p_ips=0 p_pfxs=0
+    local p_ig=0 p_id=0 p_gg=0 p_gb=0 p_gu=0 p_gd=0 p_qok=0 p_play=0
+    if [ -n "$pol_stats" ]; then
+        {
+            IFS=' ' read -r p_ok p_upd p_stale p_v4 p_v6 p_brtt p_grtt p_gqb \
+                p_resyn p_giveup p_stall p_fuse p_ips p_pfxs p_ig p_id \
+                p_gg p_gb p_gu p_gd p_qok p_play || true
+            IFS= read -r pol_sni || pol_sni=""
+        } <<EOF_AP_STATS
+$pol_stats
+EOF_AP_STATS
+    fi
+
+    printf ',"autopilot":{"policy_present":%s,"gvsub_present":%s,"gvsub_enabled":%s,"updated":%s,"stale":%s,"usable_v4":%s,"usable_v6":%s,"baseline_rtt_ms":%s,"ggc_rtt_ms":%s,"global_quic_blocked":%s,"preflight_sni":' \
+        "$([ "$p_ok" = 1 ] && echo true || echo false)" \
+        "$gvsub_present" \
+        "$gvsub_enabled" \
+        "${p_upd:-0}" \
+        "$([ "$p_stale" = 1 ] && echo true || echo false)" \
+        "${p_v4:-0}" \
+        "${p_v6:-0}" \
+        "${p_brtt:-0}" \
+        "${p_grtt:-0}" \
+        "$([ "$p_gqb" = 1 ] && echo true || echo false)"
+    json_string "${pol_sni:-}"
+    printf ',"resyn_delay_ms":%s,"preflight_giveup_ms":%s,"ggc_stall_guard_ms":%s,"safety_fuse_ok":%s,"observed_count":%s,"ips_total":%s,"prefixes_total":%s,"isp_good":%s,"isp_dead":%s,"google_good":%s,"google_bypassable":%s,"google_unbypassable":%s,"google_dead":%s,"quic_ok_count":%s,"play_count":%s}' \
+        "${p_resyn:-0}" "${p_giveup:-0}" "${p_stall:-0}" \
+        "$([ "$p_fuse" = 1 ] && echo true || echo false)" \
+        "${obs_count:-0}" \
+        "${p_ips:-0}" "${p_pfxs:-0}" "${p_ig:-0}" "${p_id:-0}" \
+        "${p_gg:-0}" "${p_gb:-0}" "${p_gu:-0}" "${p_gd:-0}" \
+        "${p_qok:-0}" "${p_play:-0}"
+}
+
 json_fail() {
     # usage: json_fail <http-status-line> <msg>
     local status="$1" msg="$2"
@@ -263,9 +382,30 @@ case "$method $path" in
         category_youtube=$(read_flag "Z2K_CATEGORY_YOUTUBE" "$CONFIG_FILE" "1")
         category_rkn=$(read_flag "Z2K_CATEGORY_RKN" "$CONFIG_FILE" "1")
         category_discord_voice=$(read_flag "Z2K_CATEGORY_DISCORD_VOICE" "$CONFIG_FILE" "1")
-        gv_preflight=$(read_flag "Z2K_GV_SERVER_REPLY2" "$CONFIG_FILE" "1")
+        yt_autopilot=$(read_flag "Z2K_YT_AUTOPILOT" "$CONFIG_FILE" "auto")
+        case "$yt_autopilot" in auto|1|0) ;; *) yt_autopilot="auto" ;; esac
+        gv_sr2=$(read_flag "Z2K_GV_SERVER_REPLY2" "$CONFIG_FILE" "1")
+        gv_mode=$(read_flag "Z2K_GV_PREFLIGHT_MODE" "$CONFIG_FILE" "auto")
+        case "$gv_sr2" in
+            0|off) gv_preflight="off" ;;
+            1)
+                case "$gv_mode" in
+                    1|off) gv_preflight="$gv_mode" ;;
+                    *) [ "$yt_autopilot" = "0" ] && gv_preflight="1" || gv_preflight="auto" ;;
+                esac
+                ;;
+            *) gv_preflight="$gv_sr2" ;;
+        esac
         yt_quic_off=$(read_flag "Z2K_YT_QUIC_OFF" "$CONFIG_FILE" "0")
+        case "$yt_quic_off" in
+            1|off) ;;
+            *) [ "$yt_autopilot" != "0" ] && yt_quic_off="auto" || yt_quic_off="off" ;;
+        esac
         quic_off=$(read_flag "Z2K_QUIC_OFF" "$CONFIG_FILE" "0")
+        case "$quic_off" in
+            1|off) ;;
+            *) [ "$yt_autopilot" != "0" ] && quic_off="auto" || quic_off="off" ;;
+        esac
         dynamic_ttl=$(read_flag "Z2K_DYNAMIC_TTL" "$CONFIG_FILE" "1")
         auto_update=$(read_flag "Z2K_AUTO_UPDATE_ENABLED" "$CONFIG_FILE" "1")
         # Час ночного обновления. Нормализуем здесь, а не в панели: конфиг
@@ -289,15 +429,18 @@ case "$method $path" in
         printf ',"category_youtube":'; json_string "$category_youtube"
         printf ',"category_rkn":'; json_string "$category_rkn"
         printf ',"category_discord_voice":'; json_string "$category_discord_voice"
-        printf ',"gv_preflight":'; json_string "${gv_preflight:-1}"
-        printf ',"yt_quic_off":'; json_string "${yt_quic_off:-0}"
-        printf ',"quic_off":'; json_string "${quic_off:-0}"
+        printf ',"yt_autopilot":'; json_string "${yt_autopilot:-auto}"
+        printf ',"gv_preflight":'; json_string "${gv_preflight:-auto}"
+        printf ',"yt_quic_off":'; json_string "${yt_quic_off:-auto}"
+        printf ',"quic_off":'; json_string "${quic_off:-auto}"
         printf ',"customd":';                json_string "${customd:-0}"
         printf ',"dynamic_ttl":';            json_string "${dynamic_ttl:-1}"
         printf ',"auto_update":';            json_string "${auto_update:-1}"
         printf ',"au_hour":';                json_string "${au_hour:-02}"
         printf ',"autohostlist":';           json_string "${autohostlist:-0}"
-        printf '},"tunnel":{"running":%s}}\n' "${tunnel_running:-false}"
+        printf '}'
+        autopilot_status_json "${gv_sr2:-1}"
+        printf ',"tunnel":{"running":%s}}\n' "${tunnel_running:-false}"
         exit 0
         ;;
 
@@ -328,6 +471,7 @@ case "$method $path" in
         ;;
 
     # ---------- TOGGLES (async — returns job_id) ----------
+    "POST /toggle/yt-autopilot"|\
     "POST /toggle/game-warp"|\
     "POST /toggle/customd"|\
     "POST /toggle/dynamic-ttl"|\
@@ -342,11 +486,28 @@ case "$method $path" in
         body=$(read_body)
         val=$(form_value "$body" "value")
         [ -z "$val" ] && val=$(form_value "${QUERY_STRING:-}" "value")
-        case "$val" in
-            0|1) ;;
-            *) json_fail "400 Bad Request" "value must be 0 or 1" ;;
+        case "$path" in
+            /toggle/yt-autopilot)
+                case "$val" in
+                    auto|1|0) ;;
+                    *) json_fail "400 Bad Request" "value must be auto, 1 or 0" ;;
+                esac
+                ;;
+            /toggle/gv-preflight|/toggle/yt-quic-off|/toggle/quic-off)
+                case "$val" in
+                    auto|1|off|0) ;;
+                    *) json_fail "400 Bad Request" "value must be auto, 1, off or 0" ;;
+                esac
+                ;;
+            *)
+                case "$val" in
+                    0|1) ;;
+                    *) json_fail "400 Bad Request" "value must be 0 or 1" ;;
+                esac
+                ;;
         esac
         case "$path" in
+            /toggle/yt-autopilot)    _toggle_fn=toggle_yt_autopilot;    _label="Автопилот видео YouTube" ;;
             /toggle/category-youtube) _toggle_fn=toggle_category_youtube; _label="YouTube" ;;
             /toggle/category-rkn) _toggle_fn=toggle_category_rkn; _label="RKN" ;;
             /toggle/category-discord-voice) _toggle_fn=toggle_category_discord_voice; _label="Discord Voice / STUN" ;;
@@ -359,7 +520,12 @@ case "$method $path" in
             /toggle/auto-update)     _toggle_fn=toggle_auto_update;     _label="Автообновление" ;;
             /toggle/autohostlist)    _toggle_fn=toggle_autohostlist;    _label="Автохостлист" ;;
         esac
-        _verb=$([ "$val" = "1" ] && echo "Включаю" || echo "Отключаю")
+        case "$val" in
+            auto) _verb="Перевожу в Авто:" ;;
+            off)  _verb="Принудительно отключаю" ;;
+            1)    _verb="Включаю" ;;
+            0)    _verb="Отключаю" ;;
+        esac
         job_id=$(svc_action_async "${_verb} ${_label}" "${_toggle_fn} ${val}")
         json_header
         printf '{"ok":true,"job":'; json_string "$job_id"; printf '}\n'

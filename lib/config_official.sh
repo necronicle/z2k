@@ -1597,18 +1597,22 @@ generate_nfqws2_opt_from_strategies() {
        && [ -f "${ZAPRET2_DIR:-/opt/zapret2}/lua/z2k-gv-autopilot.lua" ]; then
         Z2K_AUTOPILOT_ACTIVE=1
     fi
-    local Z2K_GV_SERVER_REPLY2 Z2K_PREFLIGHT_STEP=""
+    local Z2K_GV_SERVER_REPLY2 Z2K_GV_PREFLIGHT_MODE Z2K_PREFLIGHT_STEP=""
     Z2K_GV_SERVER_REPLY2=$(safe_config_read "Z2K_GV_SERVER_REPLY2" "${ZAPRET2_DIR:-/opt/zapret2}/config" "1")
+    Z2K_GV_PREFLIGHT_MODE=$(safe_config_read "Z2K_GV_PREFLIGHT_MODE" "${ZAPRET2_DIR:-/opt/zapret2}/config" "auto")
+    case "$Z2K_GV_PREFLIGHT_MODE" in auto|1|off) ;; *) Z2K_GV_PREFLIGHT_MODE="auto" ;; esac
     # Файл проверяем на существование так же, как у z2k_sni_pick: инстанс,
     # чьей функции нет в движке, валит его в error() на каждом пакете профиля.
-    if [ "$Z2K_GV_SERVER_REPLY2" = "1" ] \
+    if [ "$Z2K_GV_SERVER_REPLY2" = "1" ] && [ "$Z2K_GV_PREFLIGHT_MODE" != "off" ] \
        && [ -f "${ZAPRET2_DIR:-/opt/zapret2}/lua/z2k-preflight.lua" ]; then
         # v6 — шаг и на IPv6. init снимает его при старте, если увидит NAT
         # для IPv6 (S99zapret2, z2k_preflight_v6_gate): за NAT повторный SYN
         # ушёл бы с внутренним адресом.
         # Обрыв начала в 58983 был на разрезанной пробе; посылаем ClientHello целиком.
         Z2K_PREFLIGHT_STEP="--in-range=a --out-range=a --payload=all --lua-desync=z2k_preflight:pos=none:pieces=1:keepts:sni=www.google.com:timeout=4:v6"
-        [ "$Z2K_YT_AUTOPILOT" = "0" ] && Z2K_PREFLIGHT_STEP="${Z2K_PREFLIGHT_STEP}:autopilot=0"
+        if [ "$Z2K_YT_AUTOPILOT" = "0" ] || [ "$Z2K_GV_PREFLIGHT_MODE" = "1" ]; then
+            Z2K_PREFLIGHT_STEP="${Z2K_PREFLIGHT_STEP}:autopilot=0"
+        fi
     fi
     local Z2K_GV_AUTOPILOT_STEPS=""
     if [ "$Z2K_AUTOPILOT_ACTIVE" = "1" ]; then
@@ -1647,7 +1651,7 @@ generate_nfqws2_opt_from_strategies() {
         # по имени DNS-вопроса до публикации IP. Уже опубликованные
         # адреса сохраняются до перезагрузки: удаление может оборвать пробу A.
         # Новый whitelist не отменяет их охват A (в том числе при общих IP).
-        if [ -n "$Z2K_PREFLIGHT_STEP" ]; then
+        if [ -n "$Z2K_PREFLIGHT_STEP" ] || { [ "$Z2K_AUTOPILOT_ACTIVE" = "1" ] && [ "$Z2K_GV_SERVER_REPLY2" = "1" ]; }; then
             # validate-config идёт ДО S99 start, а после reboot /tmp пуст.
             # Подготовить файл при самой генерации, до публикации --ipset.
             local Z2K_GVSUB_IPS="${Z2K_GVSUB_IPS:-/tmp/z2k-gv-ips.txt}"
@@ -1756,8 +1760,11 @@ generate_nfqws2_opt_from_strategies() {
 
     if [ "$Z2K_AUTOPILOT_ACTIVE" = "1" ] && [ "$quic_off" != "1" ]; then
         local ap_quic_arg=""
-        if [ "$yt_quic_off" = "1" ] || [ "$category_youtube" = 0 ]; then
-            ap_quic_arg=":yt=0"
+        if [ "$yt_quic_off" = "1" ] || [ "$yt_quic_off" = "off" ] || [ "$category_youtube" = 0 ]; then
+            ap_quic_arg="${ap_quic_arg}:yt=0"
+        fi
+        if [ "$quic_off" = "off" ]; then
+            ap_quic_arg="${ap_quic_arg}:global=0"
         fi
         case "$quic_udp" in
             *"--in-range=a --out-range=a --payload=all"*"--lua-desync=circular"*)
@@ -2423,6 +2430,7 @@ create_official_config() {
     local saved_Z2K_WARP_TRANSPORT="auto"
     local saved_Z2K_WARP_WDTT="0"
     local saved_Z2K_YT_AUTOPILOT="auto"
+    local saved_Z2K_GV_PREFLIGHT_MODE="auto"
     # Час ночного автообновления (issue #60). Читается планировщиком
     # (files/z2k-scheduler.sh), ставится в панели: «Режимы» → Автообновление.
     local saved_Z2K_AU_HOUR="02"
@@ -2485,9 +2493,9 @@ create_official_config() {
         case "$saved_Z2K_PROVIDER_CACHE" in 0|1) ;; *) saved_Z2K_PROVIDER_CACHE="" ;; esac
         # Тумблеры QUIC сохраняются тем же механизмом.
         saved_Z2K_QUIC_OFF=$(safe_config_read "Z2K_QUIC_OFF" "$config_file" "")
-        case "$saved_Z2K_QUIC_OFF" in 0|1|"") ;; *) saved_Z2K_QUIC_OFF="" ;; esac
+        case "$saved_Z2K_QUIC_OFF" in 0|1|auto|off|"") ;; *) saved_Z2K_QUIC_OFF="" ;; esac
         saved_Z2K_YT_QUIC_OFF=$(safe_config_read "Z2K_YT_QUIC_OFF" "$config_file" "")
-        case "$saved_Z2K_YT_QUIC_OFF" in 0|1|"") ;; *) saved_Z2K_YT_QUIC_OFF="" ;; esac
+        case "$saved_Z2K_YT_QUIC_OFF" in 0|1|auto|off|"") ;; *) saved_Z2K_YT_QUIC_OFF="" ;; esac
         saved_Z2K_PANEL_AUTH=$(safe_config_read "Z2K_PANEL_AUTH" "$config_file" "0")
         saved_Z2K_AUTO_UPDATE_ENABLED=$(safe_config_read "Z2K_AUTO_UPDATE_ENABLED" "$config_file" "1")
         saved_Z2K_WARP_TRANSPORT=$(safe_config_read "Z2K_WARP_TRANSPORT" "$config_file" "auto")
@@ -2497,6 +2505,8 @@ create_official_config() {
         case "$saved_Z2K_WARP_TRANSPORT" in wg|h2) ;; *) saved_Z2K_WARP_TRANSPORT=auto ;; esac
         saved_Z2K_YT_AUTOPILOT=$(safe_config_read "Z2K_YT_AUTOPILOT" "$config_file" "auto")
         case "$saved_Z2K_YT_AUTOPILOT" in 0|1|auto) ;; *) saved_Z2K_YT_AUTOPILOT="auto" ;; esac
+        saved_Z2K_GV_PREFLIGHT_MODE=$(safe_config_read "Z2K_GV_PREFLIGHT_MODE" "$config_file" "auto")
+        case "$saved_Z2K_GV_PREFLIGHT_MODE" in auto|1|off) ;; *) saved_Z2K_GV_PREFLIGHT_MODE="auto" ;; esac
         saved_Z2K_AU_HOUR=$(safe_config_read "Z2K_AU_HOUR" "$config_file" "02")
         # Час — ровно две цифры 00..23. Мусор (правка руками, обрезанный
         # конфиг) молча возвращает ночное умолчание: планировщик сравнивает
@@ -2930,6 +2940,9 @@ Z2K_WARP_WDTT=${saved_Z2K_WARP_WDTT}
 # Автопилот YouTube / googlevideo / gvt1 (auto|1|0). По умолчанию auto
 # работает автоматически из коробки, сохраняя ручные оверрайды 0/1.
 Z2K_YT_AUTOPILOT=${saved_Z2K_YT_AUTOPILOT}
+# Режим preflight при активном автопилоте (auto|1|off). По умолчанию auto
+# делегирует решение автопилоту, off отключает только пробу без остановки gvsub.
+Z2K_GV_PREFLIGHT_MODE=${saved_Z2K_GV_PREFLIGHT_MODE}
 # Час ночного автообновления, 00..23 по времени роутера. Реальный запуск
 # позже на 0..60 минут: разброс детерминированный по хосту, чтобы флот не
 # пришёл к GitHub в одну секунду (см. z2k_host_jitter в z2k-auto-update.sh).
