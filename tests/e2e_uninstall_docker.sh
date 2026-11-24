@@ -71,6 +71,10 @@ esac
 N
 printf '#!/bin/sh\nexit 1\n' > /stub/ip6tables
 cat > /state/rules <<'N'
+mangle PREROUTING -p tcp -m multiport --dports 80,443,2053,2083,2087,2096,5222,8443 -m connskip --connskip 60 -j PPE
+mangle FORWARD -p tcp -m multiport --dports 80,443,2053,2083,2087,2096,5222,8443 -m connskip --connskip 60 -j PPE
+mangle PREROUTING -p udp --dport 443 -m connskip --connskip 60 -j PPE
+mangle FORWARD -p udp --dport 443 -m connskip --connskip 60 -j PPE
 mangle PREROUTING -p tcp -m multiport --dports 80,443,2053,2083,2087,2096,5222,8443 -m connskip --connskip 30 -j PPE
 mangle FORWARD -p tcp -m multiport --dports 80,443,2053,2083,2087,2096,5222,8443 -m connskip --connskip 30 -j PPE
 mangle PREROUTING -p udp --dport 443 -m connskip --connskip 30 -j PPE

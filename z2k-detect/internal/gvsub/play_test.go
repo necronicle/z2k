@@ -1,6 +1,7 @@
 package gvsub
 
 import (
+	"context"
 	"net/netip"
 	"os"
 	"strings"
@@ -37,20 +38,41 @@ func TestPlayDNSAndPreflight(t *testing.T) {
 	}
 }
 
-func TestProviderNeverInPreflight(t *testing.T) {
-	for _, host := range []string{"rr2---sn-example-node.googlevideo.com", "rr2---sn-example-node.gvt1.com", "r2.sn-example-node.c.youtube.com"} {
-		t.Run(host, func(t *testing.T) {
+func TestClusterPublishesISPAndPlayExcludingYouTubeAndGFE(t *testing.T) {
+	// PR 2: все HostCluster-адреса (Google, ISP GGC и Play gvt1.com) должны попадать
+	// в /tmp/z2k-gv-ips.txt для обработки Lua-автопилотом, а c.youtube.com и SharedGFE остаются вне ipset.
+	for _, host := range []string{"rr2---sn-example-node.googlevideo.com", "rr2---sn-example-node.gvt1.com"} {
+		t.Run("cluster_"+host, func(t *testing.T) {
 			s, _, _, _ := newSvc()
+			t.Cleanup(s.Shutdown)
 			s.IPFile = t.TempDir() + "/ips"
 			for _, ip := range []string{"192.0.2.141", "2001:db8::d"} {
-				s.OnDNS(host, []netip.Addr{netip.MustParseAddr(ip)})
+				wait(t, s.OnDNS(host, []netip.Addr{netip.MustParseAddr(ip)}))
+			}
+			b, e := os.ReadFile(s.IPFile)
+			if e != nil {
+				t.Fatal(e)
+			}
+			got := string(b)
+			if !strings.Contains(got, "192.0.2.141\n") || !strings.Contains(got, "2001:db8::d\n") {
+				t.Fatalf("HostCluster IP not published: %q", got)
+			}
+		})
+	}
+	for _, host := range []string{"r2.sn-example-node.c.youtube.com", "redirector.googlevideo.com"} {
+		t.Run("excluded_"+host, func(t *testing.T) {
+			s, _, _, _ := newSvc()
+			t.Cleanup(s.Shutdown)
+			s.IPFile = t.TempDir() + "/ips"
+			for _, ip := range []string{"192.0.2.141", "2001:db8::d"} {
+				wait(t, s.OnDNS(host, []netip.Addr{netip.MustParseAddr(ip)}))
 			}
 			b, e := os.ReadFile(s.IPFile)
 			if e != nil {
 				t.Fatal(e)
 			}
 			if string(b) != ipFileSentinels {
-				t.Fatalf("provider in preflight: %q", b)
+				t.Fatalf("non-cluster host polluted ipfile: %q", b)
 			}
 		})
 	}
@@ -87,15 +109,30 @@ func TestServerReplyProbesDNSAddress(t *testing.T) {
 	}
 }
 
+type gatedChecker struct {
+	ready chan struct{}
+	inner Checker
+}
+
+func (g *gatedChecker) Check(ctx context.Context, a netip.Addr) Verdict {
+	<-g.ready
+	return g.inner.Check(ctx, a)
+}
+
 func TestProviderObservationPublishedBeforeDNSRelease(t *testing.T) {
-	s, _, _, _ := newSvc()
+	s, n, _, _ := newSvc()
+	ready := make(chan struct{})
+	s.Checker = &gatedChecker{ready: ready, inner: n}
+	t.Cleanup(s.Shutdown)
 	s.StatusPath = t.TempDir() + "/status"
 	s.IPFile = t.TempDir() + "/ips"
-	s.OnDNS("rr2---sn-cache.gvt1.com", []netip.Addr{netip.MustParseAddr("192.0.2.141")})
+	ch := s.OnDNS("rr2---sn-cache.gvt1.com", []netip.Addr{netip.MustParseAddr("192.0.2.141")})
 	b, e := os.ReadFile(s.StatusPath + ".neutral")
+	close(ready)
 	if e != nil || !strings.Contains(string(b), "provider c000028d") {
 		t.Fatalf("provider observation not synchronous: %q %v", b, e)
 	}
+	wait(t, ch)
 }
 
 func TestTeardownRemovesLegacyDNSRules(t *testing.T) {

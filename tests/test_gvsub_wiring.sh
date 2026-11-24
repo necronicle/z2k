@@ -90,6 +90,7 @@ for root in default "$TMP/custom root"; do
     ( . "$TMP/start.sh"
       z2k_gvsub_enabled() { return 0; }
       z2k_gvsub_stop() { :; }
+      z2k_gvsub_ensure_observed_owner() { :; }
       Z2K_GVSUB_BIN="$TMP/capture"
       Z2K_GVSUB_QUEUE=210
       Z2K_GVSUB_LOG="$TMP/start.log"

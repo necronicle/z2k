@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"sort"
 	"strconv"
 	"sync"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/necronicle/z2k/z2k-detect/internal/sockmark"
 	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 )
 
 // Замер QUIC устроен ИНАЧЕ, чем TCP-классификатор, и не по прихоти.
@@ -211,6 +213,8 @@ type Options struct {
 	// проверка конкретного адреса из нескольких, и стенд в тестах.
 	Addr          string
 	AllowLoopback bool
+	// Control переопределяет функцию SO_MARK на UDP-сокете (nil = sockmark.Control для Run).
+	Control func(network, address string, c syscall.RawConn) error
 }
 
 func (o *Options) withDefaults() {
@@ -435,7 +439,8 @@ type probeSpec struct {
 	srcPort int // 0 — любой
 	// frag — если задан, датаграммы уходят сырым сокетом, разрезанными на
 	// IP-фрагменты по этому плану.
-	frag *fragPlan
+	frag   *fragPlan
+	accept func(Response) bool
 }
 
 // buildInitial — обычный клиентский Initial с указанным именем.
@@ -488,7 +493,7 @@ func marshalSpec(p Initial, dcid []byte, v Version, srcPort int) probeSpec {
 // нельзя — там нет сервера. Остаётся менять адрес.
 func resolveAll(ctx context.Context, host string, opt Options) ([]*net.UDPAddr, error) {
 	if opt.Addr != "" {
-		a, err := net.ResolveUDPAddr("udp4", opt.Addr)
+		a, err := net.ResolveUDPAddr("udp", opt.Addr)
 		if err != nil {
 			return nil, fmt.Errorf("адрес %q не разбирается: %v", opt.Addr, err)
 		}
@@ -559,7 +564,11 @@ func measure(ctx context.Context, addr *net.UDPAddr, opt Options,
 				mu.Unlock()
 				return
 			}
-			r := exchange(ctx, addr, spec, timeout)
+			ctrl := opt.Control
+			if ctrl == nil {
+				ctrl = sockmark.Control
+			}
+			r := exchangeConn(ctx, addr, spec, ctrl, timeout)
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -593,25 +602,83 @@ func measure(ctx context.Context, addr *net.UDPAddr, opt Options,
 // exchangeResult — исход одного обмена.
 type exchangeResult struct {
 	ms      int64
+	rtt     time.Duration
 	ok      bool
 	refused bool // ICMP «порт недоступен» — доказательство доставки
-	ttlIn   int  // TTL входящего пакета: по нему считается расстояние до сервера
+	ttlIn   int  // TTL/HopLimit входящего пакета: по нему считается расстояние до сервера
+	resp    Response
 	err     error
+}
+
+// ProbeInitial отправляет одиночный QUIC v1 Initial с заданным sni на IPv4/IPv6
+// адрес addr (с переданной функцией SO_MARK control; nil = без метки) и принимает
+// ТОЛЬКО серверный Initial или Retry (Version Negotiation и Foreign отклоняются).
+func ProbeInitial(ctx context.Context, addr netip.AddrPort, sni string,
+	control func(network, address string, c syscall.RawConn) error,
+	timeout time.Duration) (Response, time.Duration, error) {
+	if !addr.IsValid() || !addr.Addr().IsValid() {
+		return Response{}, 0, errors.New("quicprobe: некорректный адрес цели")
+	}
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	}
+	port := int(addr.Port())
+	if port == 0 {
+		port = 443
+	}
+	spec := buildInitial(sni, V1, 1200, 0)
+	if len(spec.pkts) == 0 {
+		return Response{}, 0, errors.New("quicprobe: не удалось собрать QUIC Initial")
+	}
+	spec.accept = func(r Response) bool {
+		return r.Kind == KindInitial || r.Kind == KindRetry
+	}
+	udpAddr := &net.UDPAddr{IP: net.IP(addr.Addr().Unmap().AsSlice()), Port: port}
+	res := exchangeConn(ctx, udpAddr, spec, control, timeout)
+	if res.ok {
+		return res.resp, res.rtt, nil
+	}
+	if res.refused {
+		return Response{}, 0, fmt.Errorf("quicprobe: %w", syscall.ECONNREFUSED)
+	}
+	if res.err != nil {
+		return Response{}, 0, res.err
+	}
+	if cerr := ctx.Err(); cerr != nil {
+		return Response{}, 0, cerr
+	}
+	return Response{}, 0, fmt.Errorf("quicprobe: нет Server Initial/Retry за %s", timeout)
 }
 
 // exchange шлёт датаграммы и ждёт ответа, который РАСКРЫВАЕТСЯ нашими ключами.
 func exchange(ctx context.Context, addr *net.UDPAddr, spec probeSpec,
+	timeout time.Duration) exchangeResult {
+	return exchangeConn(ctx, addr, spec, sockmark.Control, timeout)
+}
+
+func exchangeConn(ctx context.Context, addr *net.UDPAddr, spec probeSpec,
+	control func(network, address string, c syscall.RawConn) error,
 	timeout time.Duration) exchangeResult {
 
 	if spec.frag != nil {
 		return exchangeFragmented(ctx, addr, spec, timeout)
 	}
 
-	d := net.Dialer{Control: sockmark.Control}
-	if spec.srcPort > 0 {
-		d.LocalAddr = &net.UDPAddr{Port: spec.srcPort}
+	isV6 := addr.IP.To4() == nil && addr.IP.To16() != nil
+	network := "udp4"
+	if isV6 {
+		network = "udp6"
 	}
-	c, err := d.DialContext(ctx, "udp4", addr.String())
+
+	d := net.Dialer{Control: control}
+	if spec.srcPort > 0 {
+		if isV6 {
+			d.LocalAddr = &net.UDPAddr{IP: net.IPv6zero, Port: spec.srcPort}
+		} else {
+			d.LocalAddr = &net.UDPAddr{Port: spec.srcPort}
+		}
+	}
+	c, err := d.DialContext(ctx, network, addr.String())
 	if err != nil {
 		return exchangeResult{err: err}
 	}
@@ -621,23 +688,55 @@ func exchange(ctx context.Context, addr *net.UDPAddr, spec probeSpec,
 		return exchangeResult{err: errors.New("quicprobe: сокет не UDP")}
 	}
 
-	// Просим ядро сообщать TTL входящих пакетов. Он нужен, чтобы посчитать
-	// расстояние до сервера: рабочее окно для фальшивки с укороченным TTL
-	// лежит между коробкой и сервером, и верхнюю границу даёт только замер.
-	pc := ipv4.NewPacketConn(conn)
-	wantTTL := pc.SetControlMessage(ipv4.FlagTTL, true) == nil
+	// Если контекст отменён извне, закрываем чтение немедленно.
+	stopDone := make(chan struct{})
+	defer close(stopDone)
+	if ctx != nil && ctx.Done() != nil {
+		go func() {
+			select {
+			case <-ctx.Done():
+				_ = conn.SetReadDeadline(time.Now())
+			case <-stopDone:
+			}
+		}()
+	}
+
+	var (
+		pc4     *ipv4.PacketConn
+		pc6     *ipv6.PacketConn
+		wantTTL bool
+	)
+	if isV6 {
+		pc6 = ipv6.NewPacketConn(conn)
+		wantTTL = pc6.SetControlMessage(ipv6.FlagHopLimit, true) == nil
+	} else {
+		pc4 = ipv4.NewPacketConn(conn)
+		wantTTL = pc4.SetControlMessage(ipv4.FlagTTL, true) == nil
+	}
 
 	start := time.Now()
 	for i, p := range spec.pkts {
 		if i < len(spec.ttls) && spec.ttls[i] > 0 {
-			if err := pc.SetTTL(spec.ttls[i]); err != nil {
-				return exchangeResult{err: err}
+			if isV6 {
+				if err := pc6.SetHopLimit(spec.ttls[i]); err != nil {
+					return exchangeResult{err: err}
+				}
+			} else {
+				if err := pc4.SetTTL(spec.ttls[i]); err != nil {
+					return exchangeResult{err: err}
+				}
 			}
 		} else if i > 0 && i-1 < len(spec.ttls) && spec.ttls[i-1] > 0 {
-			// Вернуть обычный TTL после укороченной фальшивки: настоящий пакет
+			// Вернуть обычный TTL/HopLimit после укороченной фальшивки: настоящий пакет
 			// обязан дойти до сервера, иначе мы померим собственную диверсию.
-			if err := pc.SetTTL(64); err != nil {
-				return exchangeResult{err: err}
+			if isV6 {
+				if err := pc6.SetHopLimit(64); err != nil {
+					return exchangeResult{err: err}
+				}
+			} else {
+				if err := pc4.SetTTL(64); err != nil {
+					return exchangeResult{err: err}
+				}
 			}
 		}
 		if _, err := conn.Write(p); err != nil {
@@ -645,16 +744,36 @@ func exchange(ctx context.Context, addr *net.UDPAddr, spec probeSpec,
 		}
 	}
 
-	_ = conn.SetReadDeadline(time.Now().Add(timeout))
+	deadline := time.Now().Add(timeout)
+	if ctx != nil {
+		if dl, hasDL := ctx.Deadline(); hasDL && dl.Before(deadline) {
+			deadline = dl
+		}
+	}
+	_ = conn.SetReadDeadline(deadline)
 	buf := make([]byte, 2048)
+	acceptFn := spec.accept
+	if acceptFn == nil {
+		acceptFn = func(r Response) bool { return r.Answered() }
+	}
 	for {
 		var (
 			n    int
-			cm   *ipv4.ControlMessage
+			ttl  int
 			rerr error
 		)
-		if wantTTL {
-			n, cm, _, rerr = pc.ReadFrom(buf)
+		if wantTTL && isV6 {
+			var cm6 *ipv6.ControlMessage
+			n, cm6, _, rerr = pc6.ReadFrom(buf)
+			if cm6 != nil {
+				ttl = cm6.HopLimit
+			}
+		} else if wantTTL {
+			var cm4 *ipv4.ControlMessage
+			n, cm4, _, rerr = pc4.ReadFrom(buf)
+			if cm4 != nil {
+				ttl = cm4.TTL
+			}
 		} else {
 			n, rerr = conn.Read(buf)
 		}
@@ -663,17 +782,20 @@ func exchange(ctx context.Context, addr *net.UDPAddr, spec probeSpec,
 			// доказательство доставки, и его надо отличать.
 			return exchangeResult{refused: errors.Is(rerr, syscall.ECONNREFUSED)}
 		}
-		ttl := 0
-		if cm != nil {
-			ttl = cm.TTL
-		}
 		resp, perr := Parse(buf[:n], spec.dcid, spec.ver)
-		if perr == nil && resp.Answered() {
-			return exchangeResult{ms: time.Since(start).Milliseconds(), ok: true, ttlIn: ttl}
+		if perr == nil && acceptFn(resp) {
+			elapsed := time.Since(start)
+			return exchangeResult{
+				ms:    elapsed.Milliseconds(),
+				rtt:   elapsed,
+				ok:    true,
+				ttlIn: ttl,
+				resp:  resp,
+			}
 		}
-		// Пакет прилетел, но нашими ключами не раскрылся. Ответом не считаем и
-		// ждём дальше: настоящий ответ может прийти следом.
-		if time.Since(start) > timeout {
+		// Пакет прилетел, но нашими ключами не раскрылся (или Version Negotiation для ProbeInitial).
+		// Ответом не считаем и ждём дальше: настоящий ответ может прийти следом.
+		if time.Now().After(deadline) {
 			return exchangeResult{}
 		}
 	}

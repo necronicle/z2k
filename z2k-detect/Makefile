@@ -16,31 +16,31 @@ $(OUTDIR):
 	mkdir -p $(OUTDIR)
 
 linux-amd64: | $(OUTDIR)
-	GOOS=linux GOARCH=amd64 $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)
 
 linux-arm64: | $(OUTDIR)
-	GOOS=linux GOARCH=arm64 $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)
 
 linux-arm: | $(OUTDIR)
-	GOOS=linux GOARCH=arm GOARM=5 $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=5 $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)
 
 linux-mipsle: | $(OUTDIR)
-	GOOS=linux GOARCH=mipsle GOMIPS=softfloat $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)
+	CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)
 
 linux-mips: | $(OUTDIR)
-	GOOS=linux GOARCH=mips GOMIPS=softfloat $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)
+	CGO_ENABLED=0 GOOS=linux GOARCH=mips GOMIPS=softfloat $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)
 
 linux-mips64le: | $(OUTDIR)
-	GOOS=linux GOARCH=mips64le GOMIPS64=softfloat $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)
+	CGO_ENABLED=0 GOOS=linux GOARCH=mips64le GOMIPS64=softfloat $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)
 
 linux-ppc64: | $(OUTDIR)
-	GOOS=linux GOARCH=ppc64 $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)
+	CGO_ENABLED=0 GOOS=linux GOARCH=ppc64 $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)
 
 linux-riscv64: | $(OUTDIR)
-	GOOS=linux GOARCH=riscv64 $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)
+	CGO_ENABLED=0 GOOS=linux GOARCH=riscv64 $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)
 
 linux-386: | $(OUTDIR)
-	GOOS=linux GOARCH=386 $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)
+	CGO_ENABLED=0 GOOS=linux GOARCH=386 $(GO) build $(BUILDFLAGS) -o $(OUTDIR)/z2k-detect-$@ $(PKG)
 
 clean:
 	rm -rf $(OUTDIR)

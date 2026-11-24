@@ -84,15 +84,40 @@ func readName(msg []byte, off int) (string, int, error) {
 	return "", 0, errors.New("петля сжатия")
 }
 
-// IsTarget — googlevideo или rr-кэш в c.youtube.com.
-func IsTarget(name string) bool {
-	name = strings.TrimSuffix(strings.ToLower(name), ".")
-	if name == Suffix || strings.HasSuffix(name, "."+Suffix) {
-		return true
+// HostKind различает реальные кэш-кластеры и общие некэшевые фронтенды Google.
+type HostKind int
+
+const (
+	HostOther        HostKind = iota
+	HostCluster               // rrX---sn-*.googlevideo.com и rrX---sn-*.gvt1.com (публикуем в gv-ipset)
+	HostYouTubeCache          // rrX---sn-*.c.youtube.com (кэш yt_tcp, в gv-ipset не публикуем)
+	HostSharedGFE             // не-кластерные *.googlevideo.com (redirector, manifest и т.п.)
+)
+
+// ClassifyTarget классифицирует DNS-имя на кэш-кластер, c.youtube-кэш или общий GFE.
+func ClassifyTarget(name string) HostKind {
+	norm := strings.TrimSuffix(strings.ToLower(name), ".")
+	if IsCacheCluster(norm) {
+		if strings.HasSuffix(norm, ".c.youtube.com") {
+			return HostYouTubeCache
+		}
+		return HostCluster
 	}
-	// c.youtube.com may reach the queue by suffix; only rr cache names act.
-	_, _, ok := ParseCluster(name)
-	return ok
+	if norm == Suffix || strings.HasSuffix(norm, "."+Suffix) {
+		return HostSharedGFE
+	}
+	return HostOther
+}
+
+// IsSharedGFE возвращает true для общих фронтендов (redirector/manifest.googlevideo.com и пр.)
+// без собственного кэш-кластера ParseCluster.
+func IsSharedGFE(name string) bool {
+	return ClassifyTarget(name) == HostSharedGFE
+}
+
+// IsTarget — googlevideo (включая SharedGFE) или rr-кэш в c.youtube.com / gvt1.com.
+func IsTarget(name string) bool {
+	return ClassifyTarget(name) != HostOther
 }
 
 // Answer — что нашлось в ответе.

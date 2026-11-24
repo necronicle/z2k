@@ -1,5 +1,5 @@
 -- tests/test_quic_reject_lua.lua — отказ QUIC (files/lua/z2k-quic-reject.lua).
--- luacheck: globals DLOG VERDICT_DROP direction_cutoff_opposite payload_check replay_first reconstruct_dissect rawsend z2k_quic_reject z2k_quic_reject_packet
+-- luacheck: globals DLOG VERDICT_DROP direction_cutoff_opposite payload_check replay_first reconstruct_dissect rawsend execution_plan_cancel z2k_quic_reject z2k_quic_reject_packet z2k_quic_reject_send
 --
 -- Запуск: lua tests/test_quic_reject_lua.lua
 --
@@ -169,6 +169,35 @@ do
     local d = desync4(ip4(initial(200))); d.dis.broken = true
     is("пакет не собрать: выкинут", VERDICT_DROP, z2k_quic_reject({}, d))
     is("пакет не собрать: отказ не шлётся", 0, #sent)
+end
+
+-- 7. Общий хелпер z2k_quic_reject_send: ip_id, нормализация пустого ifin, execution_plan_cancel
+do
+    local cancelled = 0
+    execution_plan_cancel = function() cancelled = cancelled + 1 end
+    sent, send_result = {}, true
+    local d = {
+        outgoing = true,
+        l7payload = "quic_initial",
+        ifin = "",
+        arg = {},
+        dis = {
+            ip = { ip_src = "\192\168\1\50", ip_dst = "\142\250\74\46" },
+            udp = {},
+            raw = string.char(0x45, 0, 0, 128) .. string.rep("\0", 124),
+        },
+    }
+    local v = z2k_quic_reject_send({ id = 1 }, d)
+    is("z2k_quic_reject_send: VERDICT_DROP", VERDICT_DROP, v)
+    is("z2k_quic_reject_send: вызван execution_plan_cancel", 1, cancelled)
+    is("z2k_quic_reject_send: пустой ifin -> ifout=nil", nil, sent[1].opts.ifout)
+    local id1 = u16(sent[1].pkt, 5)
+    is("z2k_quic_reject_send: ненулевой IPv4 ip_id", true, id1 > 0)
+    is("z2k_quic_reject_send: сумма IPv4 с ненулевым ip_id верна", true, csum_ok(sent[1].pkt:sub(1, 20)))
+    z2k_quic_reject_send({ id = 2 }, d)
+    local id2 = u16(sent[2].pkt, 5)
+    is("z2k_quic_reject_send: ip_id меняется между пакетами", true, id2 ~= id1)
+    execution_plan_cancel = nil
 end
 
 print(string.format("\nИТОГ: %d PASS, %d FAIL", PASS, FAIL))

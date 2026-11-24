@@ -115,7 +115,7 @@ local function remote(d)
     d.dis.ip.ip_dst=string.char(74,125,110,70)
     return d
 end
-for _,kind in ipairs({'bad','reject'}) do
+for _,kind in ipairs({'bad','dead','reject'}) do
     H.test(kind..' at start is neutral without a timer',function()
         neutral=kind..' 4a7d6e46\n'
         local h,c=H.step(remote(H.qstart()))
@@ -165,5 +165,72 @@ H.test('ICMP source never replaces the remote transport endpoint',function()
     z2k_gvsub_neutral({dis={ip={ip_src=string.char(10,0,0,1)},icmp={}},outgoing=false},c)
     H.eq(nil,c.gvsub_remote)
 end)
+H.test('dead and bad neutralize both gv_tcp and yt_tcp across sub-second reloads',function()
+    for _, key in ipairs({'gv_tcp', 'yt_tcp'}) do
+        for _, kind in ipairs({'bad', 'dead'}) do
+            local d=remote(H.tcp(nil,true,1,H.client,'tls_client_hello',true)); d.arg.key=key
+            local h,c=H.step(d); h.failure_counter=1
+            neutral=kind..' 4a7d6e46\n'
+            H.step(d); H.step(d)
+            H.eq(true,c.neutral); H.eq(nil,c.failure); H.eq(1,h.failure_counter)
+            -- Быстрая очистка и повторное появление в ту же секунду не читают устаревший кэш
+            neutral=''
+            local d2=remote(H.tcp(nil,true,1,H.client,'tls_client_hello',true)); d2.arg.key=key
+            local _,c2=H.step(d2)
+            H.eq(nil,c2.neutral)
+        end
+    end
+end)
+H.test('probe guard neutralizes gv_tcp, yt_tcp, google_tls, rkn_tcp and QUIC without counting failures',function()
+    neutral='probe 4a7d6e46\n'
+    for _, key in ipairs({'gv_tcp', 'yt_tcp', 'google_tls', 'rkn_tcp'}) do
+        local d=remote(H.tcp(nil,true,1,H.client,'tls_client_hello',true)); d.arg.key=key
+        local h,c=H.step(d); h.failure_counter=1
+        H.step(d); H.step(d)
+        H.eq(true,c.neutral); H.eq(nil,c.failure); H.eq(1,h.failure_counter)
+    end
+    local dq=remote(H.qstart()); local hq,cq=H.step(dq)
+    H.advance(6); H.eq(true,cq.neutral); H.eq(nil,hq.failure_counter)
+end)
+H.test('rkn_tcp ignores bad/dead entries and only honors probe guard',function()
+    neutral='bad 4a7d6e46\ndead 4a7d6e46\n'
+    local d=remote(H.tcp(nil,true,1,H.client,'tls_client_hello',true)); d.arg.key='rkn_tcp'
+    local h,c=H.step(d); H.step(d); H.step(d)
+    H.eq(nil,c.neutral); H.eq(true,c.failure); H.eq(1,h.failure_counter)
+end)
+H.test('neutral RAM cache obeys ~1s TTL and handles negative cache',function()
+    local opens, cached_text = 0, nil
+    io.open=function(path, ...)
+        if path == '/tmp/z2k-gvsub.json.neutral' then
+            opens=opens+1
+            if not cached_text then return nil end
+            local txt=cached_text
+            return {lines=function() return txt:gmatch('[^\n]+') end, close=function() end}
+        end
+        return real_open(path, ...)
+    end
+    dofile('files/lua/z2k-quic-silence.lua')
+    local d=remote(H.tcp(nil,true,1,H.client,'tls_client_hello',true)); d.arg.key='yt_tcp'
+    -- Отсутствующий файл также кэшируется на 1с
+    H.eq(false, z2k_gvsub_neutral(d, {}))
+    cached_text='dead 4a7d6e46\n'
+    H.now=1000.5
+    H.eq(false, z2k_gvsub_neutral(d, {}))
+    H.eq(1, opens)
+    -- По истечении 1с файл перечитывается и видит dead
+    H.now=1001.1
+    H.eq(true, z2k_gvsub_neutral(d, {}))
+    H.eq(2, opens)
+    -- В пределах новой секунды кэш снова держит результат
+    cached_text=''
+    H.now=1001.9
+    H.eq(true, z2k_gvsub_neutral(d, {}))
+    H.eq(2, opens)
+    -- При перемотке часов назад кэш сбрасывается немедленно
+    H.now=1000.0
+    H.eq(false, z2k_gvsub_neutral(d, {}))
+    H.eq(3, opens)
+end)
 io.open=real_open
+dofile('files/lua/z2k-quic-silence.lua')
 H.finish()

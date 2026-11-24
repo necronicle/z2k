@@ -9,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/necronicle/z2k/z2k-detect/internal/sockmark"
 )
 
 // Config — параметры запуска службы.
@@ -22,9 +24,11 @@ type Config struct {
 	// держать ответы DNS) или обход по ответу сервера выключен в конфиге.
 	Owner      string
 	ConfigPath string
-	// IPFile — адреса googlevideo из ответов DNS, для профиля движка с --ipset.
-	IPFile    string
-	Whitelist string // путь к hostlist исключений, перечитывается при изменении
+	// IPFile — адреса googlevideo/gvt1 из ответов DNS, для профиля движка с --ipset.
+	IPFile       string
+	Whitelist    string // путь к hostlist исключений, перечитывается при изменении
+	PolicyPath   string // путь к атомарной таблице политики (/tmp/z2k-gv-policy.dat)
+	ObservedPath string // путь к журналу DoH/DoT-наблюдений (/tmp/z2k-gv-observed.tsv)
 }
 
 // wanted — нужна ли ещё служба.
@@ -51,7 +55,18 @@ func Run(parent context.Context, cfg Config) error {
 		return err
 	}
 	rules := IPTables{Queue: strconv.Itoa(int(cfg.Queue)), NoV6: cfg.NoIPv6}
-	svc := &Service{Checker: NetChecker{}, Rules: rules, StatusPath: cfg.StatusPath, IPFile: cfg.IPFile, Whitelist: cfg.Whitelist}
+	nc := NetChecker{NoV6: cfg.NoIPv6}
+	svc := &Service{
+		Checker:          nc,
+		Prober:           nc,
+		Rules:            rules,
+		StatusPath:       cfg.StatusPath,
+		IPFile:           cfg.IPFile,
+		Whitelist:        cfg.Whitelist,
+		PolicyPath:       cfg.PolicyPath,
+		ObservedPath:     cfg.ObservedPath,
+		DetectPolicyMark: sockmark.DetectPolicyMark,
+	}
 	// Remove obsolete hooks before accepting DNS after an upgrade.
 	rules.Teardown()
 
@@ -70,13 +85,22 @@ func Run(parent context.Context, cfg Config) error {
 	}()
 	log.Printf("gvsub: очередь %d, слушаю ответы DNS", cfg.Queue)
 	n := svc.Restore()
+	svc.ProcessObservedFile()
 	// Первый снимок, включая пустой known, публикуем до освобождения DNS.
 	svc.writeNeutral()
 	svc.writeIPs()
+	svc.writePolicy()
 	if n > 0 {
 		log.Printf("gvsub: из прошлого запуска %d адресов в ходу, проверяю", n)
 		go svc.Tick()
 	}
+	// Стартовый опрос оракулов и проверку метки политики выполняем в фоне,
+	// не задерживая разбор первых пакетов очереди DNS.
+	go func() {
+		octx, ocancel := context.WithTimeout(ctx, 12*time.Second)
+		defer ocancel()
+		svc.RefreshOracles(octx)
+	}()
 
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
@@ -84,11 +108,15 @@ func Run(parent context.Context, cfg Config) error {
 
 	go func() {
 		recheck := time.NewTicker(RecheckEvery)
+		obsPoll := time.NewTicker(250 * time.Millisecond)
 		defer recheck.Stop()
+		defer obsPoll.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case <-obsPoll.C:
+				svc.ProcessObservedFile()
 			case <-recheck.C:
 				if !wanted(cfg) {
 					log.Printf("gvsub: init или конфиг службу больше не ведут — снимаю правила и выхожу")
@@ -103,7 +131,13 @@ func Run(parent context.Context, cfg Config) error {
 				if _, err := rules.Ensure(); err != nil {
 					log.Printf("gvsub: каркас правил: %v", err)
 				}
+				svc.ProcessObservedFile()
 				svc.writeNeutral()
+				go func() {
+					octx, ocancel := context.WithTimeout(ctx, 12*time.Second)
+					defer ocancel()
+					svc.RefreshOracles(octx)
+				}()
 			}
 		}
 	}()
