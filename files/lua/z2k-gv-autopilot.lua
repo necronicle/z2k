@@ -752,8 +752,10 @@ function z2k_autopilot_quic(ctx, desync)
     end
 
     local arg = desync.arg or {}
-    -- Собственные зонды Контура-2 от gvsub идут с роутера (ifin пустой/nil) и защищены маркером `probe <hex>`.
-    -- Трафик LAN-клиентов (ifin непустой, например br0) НИКОГДА не обходит QUIC-фильтр во время зонда.
+    -- Собственные зонды Контура-2 от gvsub идут с роутера (`probe <hex>` в .neutral).
+    -- На хуках с непустым ifin (например br0) LAN-клиенты сюда не попадают;
+    -- на Keenetic 4.9-ndm-5 в mangle POSTROUTING ifin пуст, поэтому защита
+    -- ограничена коротким (~1с) окном активной перепроверки одного узла.
     if (not desync.ifin or desync.ifin == "") and is_probe_guard_dis(dis, arg) then
         dlog("z2k_autopilot_quic: bypass active gvsub probe")
         return
@@ -840,7 +842,8 @@ function z2k_autopilot_tcp_fastfail(ctx, desync)
         return
     end
 
-    -- Собственные перепроверки Контура-2 от gvsub (локальный роутер без ifin + `probe <hex>`) не режем старым dead/unbypassable-вердиктом.
+    -- Собственные перепроверки Контура-2 от gvsub (`probe <hex>` в .neutral, ~1с окно)
+    -- не режем старым dead/unbypassable-вердиктом; где хук даёт ifin, LAN сюда не попадёт.
     if (not desync.ifin or desync.ifin == "") and is_probe_guard_dis(dis, desync.arg) then
         dlog("z2k_autopilot_tcp_fastfail: bypass active gvsub probe")
         return
@@ -968,9 +971,43 @@ function z2k_autopilot_stall_timer(name, st)
     end
 end
 
--- При штатном NFQWS2_TCP_PKT_IN=10 (connbytes 0:10 на reply) kernel перестаёт отдавать ответы
--- после 10-го пакета (включая ACK на multidisorder). При >=7 входящих внутри guard окно почти пусто.
-local STALL_GUARD_MAX_IN_PKTS = 7
+-- Лимиты видимости окна connbytes: при fake:repeats=7-11 сервер шлёт 7-11 пустых
+-- dup-ACK до ServerHello (входящий pcounter быстро >=14), хотя пакетов С ДАННЫМИ
+-- всего ~4-5 (pdcounter). Ядро (xt_connbytes) также считает пакеты rawsend стратегий,
+-- поэтому сопоставляем оценочный kernel out = out_pkts + max(0, in_total - in_data - 1)
+-- с окном NFQWS2_TCP_PKT_OUT (--connbytes 0:30, по умолчанию out_limit=30).
+-- В nfqws2 pos.direct — направление текущего пакета.
+local STALL_GUARD_MAX_IN_DATA_PKTS = 10
+local STALL_GUARD_MAX_OUT_PKTS = 16
+local STALL_GUARD_MAX_SRV_BYTES = 16384
+local STALL_GUARD_DEFAULT_OUT_WINDOW = 30
+local STALL_GUARD_OUT_MARGIN_ARM = 4
+local STALL_GUARD_OUT_MARGIN_CANCEL = 1
+
+local function stall_out_window(arg)
+    local v = type(arg) == "table" and tonumber(arg.out_limit) or nil
+    if not v then
+        local env = os and os.getenv and os.getenv("Z2K_TCP_PKT_OUT_OVERRIDE")
+        v = env and tonumber(env) or nil
+    end
+    return clamp_num(math.floor(v or STALL_GUARD_DEFAULT_OUT_WINDOW), 10, 100)
+end
+
+local function flow_counters(desync, st)
+    local pos = desync and desync.track and desync.track.pos
+    local in_pos = pos and (desync.outgoing and pos.reverse or pos.direct)
+    local out_pos = pos and (desync.outgoing and pos.direct or pos.reverse)
+
+    local in_pcnt = in_pos and type(in_pos.pcounter) == "number" and in_pos.pcounter > 0
+    local in_total = in_pcnt and in_pos.pcounter or (st and st.in_pkts or 0)
+    local in_data = (in_pcnt and type(in_pos.pdcounter) == "number")
+        and in_pos.pdcounter
+        or (st and st.in_data_pkts or 0)
+    local out_total = (out_pos and type(out_pos.pcounter) == "number" and out_pos.pcounter > 0)
+        and out_pos.pcounter
+        or (st and st.out_pkts or 0)
+    return in_data, out_total, in_total
+end
 
 -- В TLS 1.3 ClientFinished (опциональный CCS 6Б + одна запись 0x17 48..76Б полезной нагрузки)
 -- не является HTTP-запросом и не должен запускать сторож зависания (напр., на preconnect-сокете).
@@ -1044,6 +1081,16 @@ function z2k_autopilot_stall_guard(ctx, desync)
         return
     end
     if not st then
+        if desync.outgoing and (not desync.ifin or desync.ifin == "") and is_probe_guard_dis(dis, desync.arg) then
+            crec.z2k_sg_done = true
+            dlog("z2k_autopilot_stall_guard: bypass active gvsub probe")
+            if instance_cutoff_shim then
+                instance_cutoff_shim(ctx, desync)
+            elseif instance_cutoff then
+                instance_cutoff(ctx, desync)
+            end
+            return
+        end
         local entry = z2k_autopilot_lookup_dis(dis)
         if not entry or entry.kind ~= "isp" then
             if entry and (entry.kind == "google" or entry.kind == "play")
@@ -1080,6 +1127,9 @@ function z2k_autopilot_stall_guard(ctx, desync)
             saw_server_hello = false,
             skipped_tls13_fin = false,
             in_pkts = 0,
+            in_data_pkts = 0,
+            out_pkts = 0,
+            srv_base_seq = nil,
             armed = false,
             arm_ack = nil,
         }
@@ -1103,6 +1153,9 @@ function z2k_autopilot_stall_guard(ctx, desync)
     local ack = band(tcp.th_flags, TCP_FLAG_ACK) ~= 0
 
     if desync.outgoing then
+        if not desync.replay then
+            st.out_pkts = (st.out_pkts or 0) + 1
+        end
         local c_next = add_u32(tcp.th_seq, plen + (syn and 1 or 0) + (fin and 1 or 0))
         if not st.cli_next_seq or seq_ge_safe(c_next, st.cli_next_seq) then
             st.cli_next_seq = c_next
@@ -1111,7 +1164,15 @@ function z2k_autopilot_stall_guard(ctx, desync)
             st.srv_next_seq = tcp.th_ack
         end
     else
-        st.in_pkts = (st.in_pkts or 0) + 1
+        if not desync.replay then
+            st.in_pkts = (st.in_pkts or 0) + 1
+            if plen > 0 then
+                st.in_data_pkts = (st.in_data_pkts or 0) + 1
+            end
+        end
+        if not st.srv_base_seq then
+            st.srv_base_seq = syn and add_u32(tcp.th_seq, 1) or tcp.th_seq
+        end
         local s_next = add_u32(tcp.th_seq, plen + (syn and 1 or 0) + (fin and 1 or 0))
         if not st.srv_next_seq or seq_ge_safe(s_next, st.srv_next_seq) then
             st.srv_next_seq = s_next
@@ -1143,6 +1204,30 @@ function z2k_autopilot_stall_guard(ctx, desync)
             instance_cutoff(ctx, desync)
         end
         return
+    end
+
+    if desync.outgoing and st.armed then
+        local in_d, out_p, in_t = flow_counters(desync, st)
+        local in_emp = math.max(0, in_t - in_d - 1)
+        local est_out = out_p + in_emp
+        local out_win = stall_out_window(desync.arg)
+        if out_p >= STALL_GUARD_MAX_OUT_PKTS + 2 or est_out >= out_win - STALL_GUARD_OUT_MARGIN_CANCEL then
+            cancel_stall_timer(st)
+            st.armed = false
+            crec.z2k_sg_done = true
+            dlog(string.format(
+                "z2k_autopilot_stall_guard: cancelled at connbytes boundary (out=%d est_out=%d/%d) srv=%s:%d cli=%s:%d",
+                tonumber(out_p) or 0, tonumber(est_out) or 0, tonumber(out_win) or 0,
+                tostring(bin_to_ip_text(st.srv_ip)), tonumber(st.srv_port) or 0,
+                tostring(bin_to_ip_text(st.cli_ip)), tonumber(st.cli_port) or 0
+            ))
+            if instance_cutoff_shim then
+                instance_cutoff_shim(ctx, desync)
+            elseif instance_cutoff then
+                instance_cutoff(ctx, desync)
+            end
+            return
+        end
     end
 
     local sbuf = desync.reasm_data or (dis and dis.payload)
@@ -1216,11 +1301,29 @@ function z2k_autopilot_stall_guard(ctx, desync)
         if tls_kind == "control" or tls_kind == "alert" then
             return
         end
-        if (st.in_pkts or 0) >= STALL_GUARD_MAX_IN_PKTS then
+        if not st.skipped_tls13_fin and is_tls13_client_finished(sbuf) then
+            st.skipped_tls13_fin = true
+            return
+        end
+        local in_data, out_pkts, in_total = flow_counters(desync, st)
+        local in_empty = math.max(0, in_total - in_data - 1)
+        local est_out = out_pkts + in_empty
+        local out_win = stall_out_window(desync.arg)
+        local srv_bytes = (ack and st.srv_base_seq and seq_ge_safe(tcp.th_ack, st.srv_base_seq))
+            and ((tcp.th_ack - st.srv_base_seq) % 4294967296) or 0
+        if in_data >= STALL_GUARD_MAX_IN_DATA_PKTS
+            or out_pkts >= STALL_GUARD_MAX_OUT_PKTS
+            or est_out > out_win - STALL_GUARD_OUT_MARGIN_ARM
+            or srv_bytes > STALL_GUARD_MAX_SRV_BYTES then
             crec.z2k_sg_done = true
             dlog(string.format(
-                "z2k_autopilot_stall_guard: skip arming near reply connbytes cap (%d pkts) srv=%s:%d cli=%s:%d",
-                tonumber(st.in_pkts) or 0,
+                "z2k_autopilot_stall_guard: skip arming near connbytes cap (in_data=%d in_total=%d out=%d est_out=%d/%d srv_bytes=%d) srv=%s:%d cli=%s:%d",
+                tonumber(in_data) or 0,
+                tonumber(in_total) or 0,
+                tonumber(out_pkts) or 0,
+                tonumber(est_out) or 0,
+                tonumber(out_win) or 0,
+                tonumber(srv_bytes) or 0,
                 tostring(bin_to_ip_text(st.srv_ip)), tonumber(st.srv_port) or 0,
                 tostring(bin_to_ip_text(st.cli_ip)), tonumber(st.cli_port) or 0
             ))
@@ -1229,10 +1332,6 @@ function z2k_autopilot_stall_guard(ctx, desync)
             elseif instance_cutoff then
                 instance_cutoff(ctx, desync)
             end
-            return
-        end
-        if not st.skipped_tls13_fin and is_tls13_client_finished(sbuf) then
-            st.skipped_tls13_fin = true
             return
         end
         local entry, header = z2k_autopilot_lookup_dis(dis)

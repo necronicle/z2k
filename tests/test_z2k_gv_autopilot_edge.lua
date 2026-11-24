@@ -20,6 +20,7 @@ local tmp_dir = os.getenv("TMPDIR") or "/tmp"
 local stamp = tostring(os.time())
 local pol_file = tmp_dir .. "/z2k_edge_policy_" .. stamp .. ".dat"
 local obs_file = tmp_dir .. "/z2k_edge_obs_" .. stamp .. ".tsv"
+local neu_file = tmp_dir .. "/z2k_edge_neutral_" .. stamp .. ".txt"
 
 local clock_now = os.time()
 local orig_os_time = os.time
@@ -104,7 +105,7 @@ dofile(ROOT .. "/files/lua/z2k-quic-reject.lua")
 dofile(ROOT .. "/files/lua/z2k-gv-autopilot.lua")
 dofile(ROOT .. "/files/lua/z2k-preflight.lua")
 
-z2k_autopilot_set_paths(pol_file, obs_file)
+z2k_autopilot_set_paths(pol_file, obs_file, neu_file)
 
 local function ip4_bytes(a, b, c, d)
     return string.char(a, b, c, d)
@@ -155,7 +156,7 @@ local function write_policy(lines)
     end
     f:close()
     z2k_autopilot_reset()
-    z2k_autopilot_set_paths(pol_file, obs_file)
+    z2k_autopilot_set_paths(pol_file, obs_file, neu_file)
 end
 
 local function read_observed()
@@ -173,6 +174,7 @@ local function reset_state()
     cancels = 0
     cutoffs = 0
     os.remove(obs_file)
+    os.remove(neu_file)
     local reset_pf = rawget(_G, "z2k_preflight_reset")
     if reset_pf then reset_pf() end
 end
@@ -382,31 +384,255 @@ is("client th_ack progress marks z2k_sg_done", true, track13fin.lua_state.z2k_sg
 invoke_timer(tn_fin, ti_fin)
 is("stale timer after client th_ack progress sends 0 RSTs", 0, #rawsend_dissects)
 
--- Поток с 7 входящими пакетами (мультидизордер ACK + ServerHello впритык к connbytes 0:10) не ставит таймер
+-- 1) 9 пустых dup-ACK на фейки + 4 сегмента ServerHello + 4 replay (in_total=14, in_data=4, srv_bytes=4486)
+-- взводят stall_guard и отменяются пустым ACK клиента с продвинутым th_ack.
 reset_state()
-local track_blind = { lua_state = {} }
+local track_dup = { lua_state = {} }
+z2k_autopilot_stall_guard({}, {
+    outgoing = false, l7payload = "empty", track = track_dup,
+    dis = tcp4(IP_ISP, CLI4, 443, 43012, TH_SYN + TH_ACK, 199, 100, ""),
+})
 z2k_autopilot_stall_guard({}, {
     outgoing = true, ifin = "br0", ifout = "eth3",
-    l7payload = "tls_client_hello", track = track_blind,
+    l7payload = "tls_client_hello", track = track_dup,
     dis = tcp4(CLI4, IP_ISP, 43012, 443, TH_ACK + TH_PUSH, 100, 200, tls_ch_rec),
 })
-for i = 1, 6 do
+for _ = 1, 9 do
     z2k_autopilot_stall_guard({}, {
-        outgoing = false, l7payload = "empty", track = track_blind,
-        dis = tcp4(IP_ISP, CLI4, 443, 43012, TH_ACK, 200, 109, ""),
+        outgoing = false, l7payload = "empty", track = track_dup,
+        dis = tcp4(IP_ISP, CLI4, 443, 43012, TH_ACK, 200, 100, ""),
+    })
+end
+local sh_segs = {
+    { seq = 200, len = 1400, l7 = "tls_server_hello", data = tls_sh_rec .. string.rep("s", 1400 - #tls_sh_rec) },
+    { seq = 1600, len = 1400, l7 = "unknown", data = string.rep("s", 1400) },
+    { seq = 3000, len = 1400, l7 = "unknown", data = string.rep("s", 1400) },
+    { seq = 4400, len = 286, l7 = "unknown", data = string.rep("s", 286) },
+}
+for _, s in ipairs(sh_segs) do
+    z2k_autopilot_stall_guard({}, {
+        outgoing = false, l7payload = s.l7, track = track_dup,
+        dis = tcp4(IP_ISP, CLI4, 443, 43012, TH_ACK + TH_PUSH, s.seq, 109, s.data),
+    })
+    z2k_autopilot_stall_guard({}, {
+        outgoing = false, replay = true, l7payload = s.l7, track = track_dup,
+        dis = tcp4(IP_ISP, CLI4, 443, 43012, TH_ACK + TH_PUSH, s.seq, 109, s.data),
     })
 end
 z2k_autopilot_stall_guard({}, {
-    outgoing = false, l7payload = "tls_server_hello", track = track_blind,
-    dis = tcp4(IP_ISP, CLI4, 443, 43012, TH_ACK + TH_PUSH, 200, 109, tls_sh_rec),
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "unknown", track = track_dup,
+    dis = tcp4(CLI4, IP_ISP, 43012, 443, TH_ACK + TH_PUSH, 109, 4686, tls13_http_req),
+})
+local tn_d, ti_d = find_timer("z2k_sg_")
+is("9 empty dup-ACKs + 4 ServerHello segs (in_data=4, in_total=14) arms stall guard", true, tn_d ~= nil)
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "empty", track = track_dup,
+    dis = tcp4(CLI4, IP_ISP, 43012, 443, TH_ACK, 234, 4900, ""),
+})
+is("empty client ACK progress cancels dup-ACK armed stall timer", nil, timers[tn_d])
+invoke_timer(tn_d, ti_d)
+is("stale timer after dup-ACK empty ACK sends 0 RSTs", 0, #rawsend_dissects)
+
+-- 2) Относительная ориентация track.pos в nfqws2: на outgoing=true pos.reverse — входящие, pos.direct — исходящие
+reset_state()
+local track_pcnt = { lua_state = {}, pos = { direct = { pcounter = 1, pdcounter = 0 }, reverse = { pcounter = 0, pdcounter = 0 } } }
+z2k_autopilot_stall_guard({}, {
+    outgoing = false, l7payload = "empty", track = track_pcnt,
+    dis = tcp4(IP_ISP, CLI4, 443, 43013, TH_SYN + TH_ACK, 999, 100, ""),
 })
 z2k_autopilot_stall_guard({}, {
     outgoing = true, ifin = "br0", ifout = "eth3",
-    l7payload = "unknown", track = track_blind,
-    dis = tcp4(CLI4, IP_ISP, 43012, 443, TH_ACK + TH_PUSH, 109, 209, tls13_http_req),
+    l7payload = "tls_client_hello", track = track_pcnt,
+    dis = tcp4(CLI4, IP_ISP, 43013, 443, TH_ACK + TH_PUSH, 100, 1000, tls_ch_rec),
 })
-is("stall guard skips arming when in_pkts >= 7 near connbytes cap", nil, next(timers))
-is("stall guard marks done when blinded by reply connbytes", true, track_blind.lua_state.z2k_sg_done)
+z2k_autopilot_stall_guard({}, {
+    outgoing = false, l7payload = "tls_server_hello", track = track_pcnt,
+    dis = tcp4(IP_ISP, CLI4, 443, 43013, TH_ACK + TH_PUSH, 1000, 109, string.rep("x", 4487)),
+})
+track_pcnt.pos.reverse = { pcounter = 15, pdcounter = 4 }
+track_pcnt.pos.direct = { pcounter = 11, pdcounter = 3 }
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "unknown", track = track_pcnt,
+    dis = tcp4(CLI4, IP_ISP, 43013, 443, TH_ACK + TH_PUSH, 109, 5487, tls13_http_req),
+})
+local tn_p, ti_p = find_timer("z2k_sg_")
+is("reverse={pcnt=15,pdcnt=4} / direct={pcnt=11,pdcnt=3} arms stall guard", true, tn_p ~= nil)
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "unknown", track = track_pcnt,
+    dis = tcp4(CLI4, IP_ISP, 43013, 443, TH_ACK, 234, 6200, ""),
+})
+is("client ACK progress cancels stall timer after pcounter arming", nil, timers[tn_p])
+invoke_timer(tn_p, ti_p)
+is("stale timer after pcounter client ACK sends 0 RSTs", 0, #rawsend_dissects)
+
+-- 3) in_data_pkts >= 10 (10 входящих пакетов с plen > 0) пропускает взведение и ставит z2k_sg_done
+reset_state()
+local track_in_cap = { lua_state = {} }
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "tls_client_hello", track = track_in_cap,
+    dis = tcp4(CLI4, IP_ISP, 43014, 443, TH_ACK + TH_PUSH, 100, 200, tls_ch_rec),
+})
+z2k_autopilot_stall_guard({}, {
+    outgoing = false, l7payload = "tls_server_hello", track = track_in_cap,
+    dis = tcp4(IP_ISP, CLI4, 443, 43014, TH_ACK + TH_PUSH, 200, 109, tls_sh_rec),
+})
+for seg = 1, 9 do
+    z2k_autopilot_stall_guard({}, {
+        outgoing = false, l7payload = "unknown", track = track_in_cap,
+        dis = tcp4(IP_ISP, CLI4, 443, 43014, TH_ACK + TH_PUSH, 200 + seg * 100, 109, string.rep("d", 100)),
+    })
+end
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "unknown", track = track_in_cap,
+    dis = tcp4(CLI4, IP_ISP, 43014, 443, TH_ACK + TH_PUSH, 109, 1200, tls13_http_req),
+})
+is("stall guard skips arming when in_data_pkts >= 10", nil, next(timers))
+is("stall guard marks done when in_data_pkts >= 10", true, track_in_cap.lua_state.z2k_sg_done)
+
+-- 4) out_pkts >= 16 (pos.direct.pcounter = 16 на outgoing=true) пропускает взведение и ставит z2k_sg_done
+reset_state()
+local track_out_cap = { lua_state = {}, pos = { direct = { pcounter = 16, pdcounter = 3 }, reverse = { pcounter = 5, pdcounter = 4 } } }
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "tls_client_hello", track = track_out_cap,
+    dis = tcp4(CLI4, IP_ISP, 43015, 443, TH_ACK + TH_PUSH, 100, 200, tls_ch_rec),
+})
+z2k_autopilot_stall_guard({}, {
+    outgoing = false, l7payload = "tls_server_hello", track = track_out_cap,
+    dis = tcp4(IP_ISP, CLI4, 443, 43015, TH_ACK + TH_PUSH, 200, 109, tls_sh_rec),
+})
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "unknown", track = track_out_cap,
+    dis = tcp4(CLI4, IP_ISP, 43015, 443, TH_ACK + TH_PUSH, 109, 209, tls13_http_req),
+})
+is("stall guard skips arming when direct.pcounter >= 16", nil, next(timers))
+is("stall guard marks done when direct.pcounter >= 16", true, track_out_cap.lua_state.z2k_sg_done)
+
+-- 5) srv_bytes > 16384 (th_ack ушёл >16 КБ от srv_base_seq) пропускает взведение и ставит z2k_sg_done
+reset_state()
+local track_bytes_cap = { lua_state = {}, pos = { direct = { pcounter = 4, pdcounter = 2 }, reverse = { pcounter = 5, pdcounter = 4 } } }
+z2k_autopilot_stall_guard({}, {
+    outgoing = false, l7payload = "empty", track = track_bytes_cap,
+    dis = tcp4(IP_ISP, CLI4, 443, 43016, TH_SYN + TH_ACK, 199, 100, ""),
+})
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "tls_client_hello", track = track_bytes_cap,
+    dis = tcp4(CLI4, IP_ISP, 43016, 443, TH_ACK + TH_PUSH, 100, 200, tls_ch_rec),
+})
+z2k_autopilot_stall_guard({}, {
+    outgoing = false, l7payload = "tls_server_hello", track = track_bytes_cap,
+    dis = tcp4(IP_ISP, CLI4, 443, 43016, TH_ACK + TH_PUSH, 200, 109, tls_sh_rec),
+})
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "unknown", track = track_bytes_cap,
+    dis = tcp4(CLI4, IP_ISP, 43016, 443, TH_ACK + TH_PUSH, 109, 20200, tls13_http_req),
+})
+is("stall guard skips arming when srv_bytes > 16384", nil, next(timers))
+is("stall guard marks done when srv_bytes > 16384", true, track_bytes_cap.lua_state.z2k_sg_done)
+
+-- 6) Воспроизведение кейса 49780: out_pkts=11, in_total=14, in_data=4 (est_out=20).
+-- При узком окне out_limit=20 не взводится (иначе ACK ответа отрежет ядро),
+-- а при штатном окне 30 успешно взводится и отменяется пустым ACK клиента.
+reset_state()
+local track_49780_narrow = { lua_state = {}, pos = { direct = { pcounter = 11, pdcounter = 3 }, reverse = { pcounter = 14, pdcounter = 4 } } }
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3", arg = { out_limit = 20 },
+    l7payload = "tls_client_hello", track = track_49780_narrow,
+    dis = tcp4(CLI4, IP_ISP, 43017, 443, TH_ACK + TH_PUSH, 100, 200, tls_ch_rec),
+})
+z2k_autopilot_stall_guard({}, {
+    outgoing = false, arg = { out_limit = 20 }, l7payload = "tls_server_hello", track = track_49780_narrow,
+    dis = tcp4(IP_ISP, CLI4, 443, 43017, TH_ACK + TH_PUSH, 200, 109, tls_sh_rec),
+})
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3", arg = { out_limit = 20 },
+    l7payload = "unknown", track = track_49780_narrow,
+    dis = tcp4(CLI4, IP_ISP, 43017, 443, TH_ACK + TH_PUSH, 109, 209, tls13_http_req),
+})
+is("stall guard skips arming for est_out=20 at out_limit=20", nil, next(timers))
+is("stall guard marks done for est_out=20 at out_limit=20", true, track_49780_narrow.lua_state.z2k_sg_done)
+
+reset_state()
+local track_49780_wide = { lua_state = {}, pos = { direct = { pcounter = 11, pdcounter = 3 }, reverse = { pcounter = 14, pdcounter = 4 } } }
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "tls_client_hello", track = track_49780_wide,
+    dis = tcp4(CLI4, IP_ISP, 43018, 443, TH_ACK + TH_PUSH, 100, 200, tls_ch_rec),
+})
+z2k_autopilot_stall_guard({}, {
+    outgoing = false, l7payload = "tls_server_hello", track = track_49780_wide,
+    dis = tcp4(IP_ISP, CLI4, 443, 43018, TH_ACK + TH_PUSH, 200, 109, tls_sh_rec),
+})
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "unknown", track = track_49780_wide,
+    dis = tcp4(CLI4, IP_ISP, 43018, 443, TH_ACK + TH_PUSH, 109, 209, tls13_http_req),
+})
+local tn_w, ti_w = find_timer("z2k_sg_")
+is("stall guard arms for est_out=20 at default window 30", true, tn_w ~= nil)
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "empty", track = track_49780_wide,
+    dis = tcp4(CLI4, IP_ISP, 43018, 443, TH_ACK, 234, 300, ""),
+})
+is("stall guard cancels on client ACK progress at default window 30", nil, timers[tn_w])
+invoke_timer(tn_w, ti_w)
+is("stale timer after est_out=20 client ACK sends 0 RSTs", 0, #rawsend_dissects)
+
+-- 7) Отмена уже взведённого таймера при приближении к границе connbytes без продвижения ACK
+reset_state()
+local track_bnd = { lua_state = {}, pos = { direct = { pcounter = 10, pdcounter = 2 }, reverse = { pcounter = 10, pdcounter = 3 } } }
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "tls_client_hello", track = track_bnd,
+    dis = tcp4(CLI4, IP_ISP, 43019, 443, TH_ACK + TH_PUSH, 100, 200, tls_ch_rec),
+})
+z2k_autopilot_stall_guard({}, {
+    outgoing = false, l7payload = "tls_server_hello", track = track_bnd,
+    dis = tcp4(IP_ISP, CLI4, 443, 43019, TH_ACK + TH_PUSH, 200, 109, tls_sh_rec),
+})
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "unknown", track = track_bnd,
+    dis = tcp4(CLI4, IP_ISP, 43019, 443, TH_ACK + TH_PUSH, 109, 209, tls13_http_req),
+})
+local tn_b, ti_b = find_timer("z2k_sg_")
+is("stall guard arms before connbytes boundary", true, tn_b ~= nil)
+track_bnd.pos.direct = { pcounter = 23, pdcounter = 4 }
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = "br0", ifout = "eth3",
+    l7payload = "empty", track = track_bnd,
+    dis = tcp4(CLI4, IP_ISP, 43019, 443, TH_ACK, 234, 209, ""),
+})
+is("stall guard cancels at connbytes boundary without ACK progress", nil, timers[tn_b])
+is("stall guard marks done at connbytes boundary", true, track_bnd.lua_state.z2k_sg_done)
+invoke_timer(tn_b, ti_b)
+is("stale timer after connbytes boundary cancel sends 0 RSTs", 0, #rawsend_dissects)
+
+-- 8) Пропуск собственной активной пробы Контура-2 демона gvsub (.neutral, ifin="")
+reset_state()
+local nf = assert(io.open(neu_file, "w"))
+nf:write("probe 0a58010a\n")
+nf:close()
+z2k_autopilot_set_paths(pol_file, obs_file, neu_file)
+local track_probe = { lua_state = {} }
+z2k_autopilot_stall_guard({}, {
+    outgoing = true, ifin = nil, ifout = "eth3",
+    l7payload = "empty", track = track_probe,
+    dis = tcp4(CLI4, IP_ISP, 43020, 443, TH_SYN, 100, 0, ""),
+})
+is("stall guard marks done on active gvsub probe SYN", true, track_probe.lua_state.z2k_sg_done)
+is("stall guard skips timer on active gvsub probe", nil, next(timers))
+is("stall guard calls instance cutoff on active gvsub probe", 1, cutoffs)
 
 -- 5. Preflight 2.0 giveup timer cleanup on replace and timeout
 reset_state()

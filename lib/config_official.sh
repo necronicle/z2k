@@ -2621,9 +2621,14 @@ NFQWS2_PORTS_UDP_KEEPALIVE=""
 
 # Packet direction filters (connbytes)
 # NOTE: These are packet counts, NOT ranges
-# PKT_OUT=20 means "first 20 packets" (connbytes 1:20)
-# Official zapret2 defaults: TCP_PKT_OUT=20, UDP_PKT_OUT=5
-NFQWS2_TCP_PKT_OUT="20"
+# Ядерный xt_connbytes --connbytes-dir=original считает в nf_conntrack не только
+# пакеты клиента, но и исходящие fake/split-сегменты от rawsend() стратегий (9+ пакетов
+# на gv_tcp), поэтому при значении "20" двухсегментный PQ ClientHello с раздельными CCS +
+# ClientFinished подводил первый HTTP-запрос ровно к 20-му пакету, а ACK ответа отрезался
+# на 21-м и вызывал ложный таймаут в stall_guard. Значение "30" согласовано с
+# PPE_CONNSKIP=30 (z2k-ppe-deoffload.sh): старт потока и так идёт на CPU, а с 31-го
+# пакета уходит в аппаратный PPE; окно входящих NFQWS2_TCP_PKT_IN остаётся "10".
+NFQWS2_TCP_PKT_OUT="30"
 NFQWS2_TCP_PKT_IN="${nfqws2_tcp_pkt_in}"
 # UDP-окно: 8/8 вместо апстримных 5/3.
 #
